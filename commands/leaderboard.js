@@ -17,11 +17,18 @@ module.exports = {
             database.levels?.[interaction.guild.id] || {};
 
         const entries = Object.entries(guildLevels)
+            .map(([userId, data]) => [
+                userId,
+                {
+                    level: Number(data?.level) || 0,
+                    xp: Number(data?.xp) || 0,
+                    messages: Number(data?.messages) || 0
+                }
+            ])
             .sort((a, b) => {
                 if (b[1].level !== a[1].level) {
                     return b[1].level - a[1].level;
                 }
-
                 return b[1].xp - a[1].xp;
             })
             .slice(0, 10);

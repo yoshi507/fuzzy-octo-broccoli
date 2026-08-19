@@ -23,25 +23,20 @@ module.exports = {
         ),
 
     async execute(interaction) {
-
-        const message =
-            interaction.options.getString("message");
+        const message = interaction.options.getString("message");
 
         await interaction.deferReply();
 
         try {
-
-            const history =
-                getConversation(
-                    interaction.guild.id,
-                    interaction.user.id
-                );
+            const history = getConversation(
+                interaction.guild.id,
+                interaction.user.id
+            );
 
             const messages = [
                 {
                     role: "system",
-                    content:
-                        `You are Omni, a chill, friendly and helpful Discord bot.
+                    content: `You are Omni, a chill, friendly and helpful Discord bot.
 
 Personality:
 - Chill and natural
@@ -54,23 +49,21 @@ Personality:
 
 You are talking to a user in a Discord server.`
                 },
-
                 ...history.map(item => ({
                     role: item.role,
                     content: item.content
                 })),
-
                 {
                     role: "user",
                     content: message
                 }
             ];
 
-            const response =
-                await askAI(messages, {
-                    temperature: 0.8,
-                guildId: interaction.guild.id,    maxTokens: 1000
-                });
+            const response = await askAI(messages, {
+                temperature: 0.8,
+                guildId: interaction.guild.id,
+                maxTokens: 1000
+            });
 
             if (!response) {
                 return interaction.editReply(
@@ -95,42 +88,26 @@ You are talking to a user in a Discord server.`
             const maxLength = 1900;
 
             if (response.length <= maxLength) {
-
-                return interaction.editReply(
-                    response
-                );
+                return interaction.editReply(response);
             }
 
-            await interaction.editReply(
-                response.slice(0, maxLength)
-            );
+            await interaction.editReply(response.slice(0, maxLength));
 
-            for (
-                let i = maxLength;
-                i < response.length;
-                i += maxLength
-            ) {
-
+            for (let i = maxLength; i < response.length; i += maxLength) {
                 await interaction.followUp(
-                    response.slice(
-                        i,
-                        i + maxLength
-                    )
+                    response.slice(i, i + maxLength)
+                );
+            }
+        } catch (error) {
+            if (error.code === "AI_DAILY_LIMIT") {
+                return interaction.editReply(
+                    "🚫 **Daily AI limit reached.**\n\n" +
+                    "This server has used all 20 AI requests for today. " +
+                    "The limit resets tomorrow."
                 );
             }
 
-        } catch (error) {
-
-          if (error.code === "AI_DAILY_LIMIT") {
-    return interaction.editReply(
-        "🚫 **Daily AI limit reached.**\n\n" +
-        "This server has used all 20 AI requests for today. " +
-        "The limit resets tomorrow."
-    );
-}  console.error(
-                "Chat command error:",
-                error
-            );
+            console.error("Chat command error:", error);
 
             await interaction.editReply(
                 "❌ I couldn't talk to the AI right now."

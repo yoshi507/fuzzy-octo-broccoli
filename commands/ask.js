@@ -3,7 +3,7 @@ const {
 } = require("discord.js");
 
 const {
-    askOmni
+    askAI
 } = require("../utils/ai/groq.js");
 
 module.exports = {
@@ -18,20 +18,41 @@ module.exports = {
         ),
 
     async execute(interaction) {
-
-        const question =
-            interaction.options.getString(
-                "question"
-            );
+        const question = interaction.options.getString("question");
 
         await interaction.deferReply();
 
         try {
+            const response = await askAI(
+                [
+                    {
+                        role: "system",
+                        content: `You are Omni, a friendly Discord bot.
 
-            const response =
-                await askOmni(
-                    question
-                );
+Your personality:
+- Chill
+- Friendly
+- Funny when appropriate
+- Helpful
+- Natural and conversational
+- Do not sound robotic
+- Keep responses reasonably concise
+- Never pretend to be human
+- Respect Discord rules and server rules
+
+You are being used inside a Discord server.`
+                    },
+                    {
+                        role: "user",
+                        content: question
+                    }
+                ],
+                {
+                    guildId: interaction.guild.id,
+                    temperature: 0.8,
+                    maxTokens: 1000
+                }
+            );
 
             if (!response) {
                 return interaction.editReply(
@@ -42,48 +63,24 @@ module.exports = {
             const maxLength = 1900;
 
             if (response.length <= maxLength) {
-
-                return interaction.editReply(
-                    response
-                );
+                return interaction.editReply(response);
             }
 
-            const chunks = [];
+            await interaction.editReply(response.slice(0, maxLength));
 
-            for (
-                let i = 0;
-                i < response.length;
-                i += maxLength
-            ) {
-                chunks.push(
-                    response.slice(
-                        i,
-                        i + maxLength
-                    )
-                );
+            for (let i = maxLength; i < response.length; i += maxLength) {
+                await interaction.followUp(response.slice(i, i + maxLength));
             }
-
-            await interaction.editReply(
-                chunks[0]
-            );
-
-            for (
-                let i = 1;
-                i < chunks.length;
-                i++
-            ) {
-
-                await interaction.followUp(
-                    chunks[i]
-                );
-            }
-
         } catch (error) {
+            if (error.code === "AI_DAILY_LIMIT") {
+                return interaction.editReply(
+                    "🚫 **Daily AI limit reached.**\n\n" +
+                    "This server has used all 20 AI requests for today. " +
+                    "The limit resets tomorrow."
+                );
+            }
 
-            console.error(
-                "AI command error:",
-                error
-            );
+            console.error("AI command error:", error);
 
             await interaction.editReply(
                 "❌ I couldn't reach Omni's AI right now."

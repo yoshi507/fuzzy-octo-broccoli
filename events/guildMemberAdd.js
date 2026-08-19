@@ -4,39 +4,30 @@ module.exports = {
     name: "guildMemberAdd",
 
     async execute(member) {
-
         const database = loadDatabase();
 
         // =========================
         // AUTO ROLE
         // =========================
 
-        const settings =
+        const autoRoleSettings =
             database.autorole?.[member.guild.id];
 
-        if (
-            settings?.enabled &&
-            settings.roleId
-        ) {
-
-            const role =
-                member.guild.roles.cache.get(
-                    settings.roleId
-                );
+        if (autoRoleSettings?.enabled && autoRoleSettings.roleId) {
+            const role = member.guild.roles.cache.get(
+                autoRoleSettings.roleId
+            );
 
             if (role) {
-
+                const me = member.guild.members.me;
                 if (
-                    role.position <
-                    member.guild.members.me.roles.highest.position
+                    me &&
+                    role.position < me.roles.highest.position
                 ) {
-
-                    await member.roles.add(role)
+                    await member.roles
+                        .add(role)
                         .catch(error =>
-                            console.error(
-                                "AutoRole error:",
-                                error
-                            )
+                            console.error("AutoRole error:", error)
                         );
                 }
             }
@@ -46,18 +37,27 @@ module.exports = {
         // WELCOME MESSAGE
         // =========================
 
-        const welcomeChannel =
-            member.guild.channels.cache.find(
-                channel =>
-                    channel.name === "welcome" &&
-                    channel.isTextBased()
+        const welcomeSettings =
+            database.welcomeSettings?.[member.guild.id];
+
+        if (welcomeSettings?.enabled && welcomeSettings.channelId) {
+            const channel = member.guild.channels.cache.get(
+                welcomeSettings.channelId
             );
 
-        if (welcomeChannel) {
+            if (channel?.isTextBased()) {
+                const message = (welcomeSettings.message ||
+                    "👋 Welcome {user} to **{server}**!")
+                    .replaceAll("{user}", `<@${member.id}>`)
+                    .replaceAll("{username}", member.user.username)
+                    .replaceAll("{server}", member.guild.name)
+                    .replaceAll(
+                        "{membercount}",
+                        member.guild.memberCount.toString()
+                    );
 
-            await welcomeChannel.send(
-                `👋 Welcome ${member} to **${member.guild.name}**!`
-            );
+                await channel.send(message).catch(() => {});
+            }
         }
     }
 };
