@@ -1,0 +1,94 @@
+{
+  "warnings": [],
+  "settings": {
+    "1532634792246509618": {
+      "modLogChannel": "1535614411233038366"
+    }
+  },
+  "levels": {
+    "1532634792246509618": {
+      "1532348091355893880": {
+        "xp": null,
+        "level": 0,
+        "messages": 11
+      }
+    }
+  },
+  "levelRewards": {
+    "1532634792246509618": {
+      "5": "1538592699957907676",
+      "10": "1538592745298337832",
+      "20": "1538592788646727761",
+      "50": "1538592825854140436"
+    }
+  },
+  "levelSettings": {
+    "1532634792246509618": {
+      "enabled": true
+    }
+  },
+  "welcomeSettings": {
+    "1532634792246509618": {
+      "enabled": true,
+      "channelId": "1533052200304119838",
+      "message": "👋 Welcome {user} to **{server}**! You are member **#{membercount}**."
+    }
+  },
+  "goodbyeSettings": {
+    "1532634792246509618": {
+      "enabled": true,
+      "channelId": "1538595941526016171",
+      "message": "👋 Goodbye **{username}**! We'll miss you!"
+    }
+  },
+  "ticketSettings": {
+    "1532634792246509618": {
+      "enabled": true,
+      "panelChannelId": "1538462396790603856",
+      "staffRoleIds": [
+        "1534151553467023481",
+        "1534470709156384838",
+        "1532809285556371486"
+      ]
+    }
+  },
+  "automod": {
+    "1532634792246509618": {
+      "enabled": true
+    }
+  },
+  "logging": {
+    "1532634792246509618": {
+      "enabled": true,
+      "channelId": "1535614411233038366"
+    }
+  },
+  "timeouts": [
+    {
+      "guildId": "1532634792246509618",
+      "userId": "969399812342571118",
+      "moderatorId": "1532348091355893880",
+      "minutes": 1,
+      "reason": "test",
+      "createdAt": 1786904670016
+    }
+  ],
+  "autorole": {
+    "1532634792246509618": {
+      "enabled": true,
+      "roleId": "1538617353305071669"
+    }
+  },
+  "spam": {
+    "1532634792246509618": {
+      "1532348091355893880": {
+        "messages": [
+          1786988011724,
+          1786988019431
+        ],
+        "lastMessage": "Hello",
+        "strikes": 1
+      }
+    }
+  }
+}
