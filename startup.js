@@ -1,8 +1,8 @@
 /**
  * Final boot: bind PORT early (Wispbyte), then Discord login.
- * Keeps the process alive via the HTTP server and an explicit heartbeat.
  */
 const { Events } = require("discord.js");
+const { safeError } = require("./utils/processDiagnostics.js");
 
 function describeToken(raw) {
     if (raw == null || raw === "") {
@@ -12,11 +12,10 @@ function describeToken(raw) {
     if (!trimmed) {
         return { ok: false, reason: "DISCORD_TOKEN is empty after trimming" };
     }
-    // Discord bot tokens are long; never log the value
     if (trimmed.length < 50) {
         return {
             ok: false,
-            reason: `DISCORD_TOKEN looks too short (length ${trimmed.length}). Check the value in the host panel.`
+            reason: `DISCORD_TOKEN looks too short (length ${trimmed.length}). Check the host panel value.`
         };
     }
     if (/\s/.test(trimmed)) {
@@ -30,42 +29,46 @@ function describeToken(raw) {
 
 function attachClientDiagnostics(client) {
     client.on(Events.Error, (error) => {
-        console.error(
-            "[Discord] client error:",
-            error?.message || error?.code || error
-        );
+        console.error("[DIAG] Discord client error:", JSON.stringify(safeError(error), null, 2));
     });
 
     client.on("warn", (message) => {
-        console.warn("[Discord] warn:", message);
+        console.warn("[DIAG] Discord warn:", message);
     });
 
     client.on("shardError", (error, shardId) => {
         console.error(
-            `[Discord] shardError (shard ${shardId}):`,
-            error?.message || error
+            `[DIAG] Discord shardError (shard ${shardId}):`,
+            JSON.stringify(safeError(error), null, 2)
         );
     });
 
     client.on("shardDisconnect", (event, shardId) => {
         console.warn(
-            `[Discord] shardDisconnect (shard ${shardId}): code=${event?.code} reason=${event?.reason || "n/a"}`
+            `[DIAG] Discord shardDisconnect (shard ${shardId}): code=${event?.code} reason=${event?.reason || "n/a"} wasClean=${event?.wasClean}`
         );
     });
 
     client.on("shardReconnecting", (shardId) => {
-        console.log(`[Discord] shardReconnecting (shard ${shardId})…`);
+        console.log(`[DIAG] Discord shardReconnecting (shard ${shardId})…`);
+    });
+
+    client.on("shardResume", (shardId) => {
+        console.log(`[DIAG] Discord shardResume (shard ${shardId})`);
     });
 
     client.on("invalidated", () => {
         console.error(
-            "[Discord] Session invalidated. The token may be reset or invalid. Process will stay up for the API; fix DISCORD_TOKEN and restart."
+            "[DIAG] Discord session invalidated (token reset/invalid). API stays up; fix DISCORD_TOKEN and restart."
         );
+    });
+
+    client.once(Events.ClientReady, () => {
+        console.log("[DIAG] Discord ClientReady fired");
     });
 }
 
 module.exports = function boot(client) {
-    // Keep a hard reference so the HTTP server is never GC'd
     let httpServer = null;
 
     try {
@@ -73,12 +76,13 @@ module.exports = function boot(client) {
         httpServer = startApiServer(client);
         if (httpServer) {
             global.__omnibotHttpServer = httpServer;
+            console.log("[DIAG] HTTP server handle stored; event loop should stay active");
+        } else {
+            console.warn("[DIAG] HTTP server was not started (PORT missing or invalid?)");
+            console.warn(`[DIAG] PORT raw type=${typeof process.env.PORT} finite=${Number.isFinite(Number(process.env.PORT))}`);
         }
     } catch (error) {
-        console.error(
-            "Failed to start API server at boot:",
-            error?.message || error
-        );
+        console.error("[DIAG] Failed to start API server at boot:", JSON.stringify(safeError(error), null, 2));
     }
 
     attachClientDiagnostics(client);
@@ -86,61 +90,47 @@ module.exports = function boot(client) {
     const tokenInfo = describeToken(process.env.DISCORD_TOKEN);
     if (!tokenInfo.ok) {
         console.error(`❌ Discord auth: ${tokenInfo.reason}`);
-        console.error(
-            "Set DISCORD_TOKEN in the host environment (Wispbyte secrets/env). Do not put the token in source code."
-        );
         if (!process.env.PORT) {
             process.exit(1);
         }
-        console.warn(
-            "API is listening without Discord. Fix DISCORD_TOKEN and restart."
-        );
+        console.warn("[DIAG] API listening without Discord login");
         return;
     }
 
-    console.log(
-        `🔐 Logging into Discord… (token present, length=${tokenInfo.length})`
-    );
+    console.log(`🔐 Logging into Discord… (token present, length=${tokenInfo.length})`);
 
     const heartbeat = setInterval(() => {
         const ready = Boolean(client.readyAt);
         const guilds = client.guilds?.cache?.size ?? 0;
+        const listening =
+            global.__omnibotHttpServer &&
+            global.__omnibotHttpServer.listening;
         console.log(
-            `[OmniBot] heartbeat: discord=${ready ? "ready" : "not-ready"} guilds=${guilds} api=${httpServer || global.__omnibotHttpServer ? "up" : "down"}`
+            `[OmniBot] heartbeat: discord=${ready ? "ready" : "not-ready"} guilds=${guilds} apiListening=${Boolean(listening)}`
         );
-    }, 5 * 60 * 1000);
+    }, 30 * 1000);
     global.__omnibotHeartbeat = heartbeat;
 
-    client
-        .login(tokenInfo.token)
-        .then(() => {
-            console.log("✅ Discord gateway login accepted (waiting for ready event)…");
-        })
-        .catch((error) => {
-            const code = error?.code || error?.rawError?.code;
-            const msg = error?.message || String(error);
-            console.error("❌ Discord login failed.");
-            console.error(`   message: ${msg}`);
-            if (code != null) console.error(`   code: ${code}`);
+    setTimeout(() => {
+        console.log(
+            `[DIAG] post-login tick: readyAt=${Boolean(client.readyAt)} wsStatus=${client.ws?.status}`
+        );
+    }, 2000);
 
-            const lower = msg.toLowerCase();
-            if (
-                lower.includes("token") ||
-                lower.includes("unauthorized") ||
-                code === "TokenInvalid" ||
-                code === 401
-            ) {
+    const loginPromise = client.login(tokenInfo.token);
+    loginPromise.then(
+        () => {
+            console.log("✅ Discord gateway login accepted (waiting for ready)…");
+        },
+        (error) => {
+            console.error("❌ Discord login failed:", JSON.stringify(safeError(error), null, 2));
+            const msg = (error && error.message) || "";
+            if (/token/i.test(msg) || error?.code === "TokenInvalid") {
                 console.error(
-                    "   Hint: DISCORD_TOKEN is invalid or revoked. Regenerate the bot token in the Discord Developer Portal and update the host env var."
-                );
-            } else if (lower.includes("intent")) {
-                console.error(
-                    "   Hint: Enable required Privileged Gateway Intents (Server Members, Message Content, Presence if used) in the Discord Developer Portal."
+                    "[DIAG] Hint: token rejected by Discord. Regenerate bot token and update host env."
                 );
             }
-
-            console.warn(
-                "API remains listening. Fix Discord auth and restart the process."
-            );
-        });
+            console.warn("[DIAG] API + heartbeat remain active after login failure");
+        }
+    );
 };
