@@ -14,7 +14,9 @@ const {
 } = require("../utils/antiNuke.js");
 
 const {
-    askAI
+    askAI,
+    limitReachedMessage,
+    isLimitError
 } = require("../utils/ai/groq.js");
 
 module.exports = {
@@ -249,8 +251,10 @@ module.exports = {
                     `📝 Reason: ${reason}`
                 );
             } catch (error) {
+                if (isLimitError(error)) {
+                    return interaction.editReply(limitReachedMessage());
+                }
                 console.error("AI security test error:", error);
-
                 await interaction.editReply(
                     "❌ The AI security test failed. Check the console."
                 );
