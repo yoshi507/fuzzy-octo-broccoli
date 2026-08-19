@@ -5,6 +5,7 @@ const {
     addIncident
 } = require("./ai/security.js");
 const { loadDatabase } = require("../database/database.js");
+const { askAI } = require("./ai/groq.js");
 
 const actionWindows = new Map();
 const alertCooldowns = new Map();
@@ -271,6 +272,43 @@ async function applySafeResponse(guild, executor, config, incidentType) {
     return { timedOut: false };
 }
 
+async function analyseWithAI(guild, actionLabel, count, executor) {
+    try {
+        const analysis = await askAI(
+            [
+                {
+                    role: "system",
+                    content:
+                        "You assist Discord anti-nuke monitoring. " +
+                        "Given a short activity report, reply in 2-3 sentences: " +
+                        "whether this looks like destructive abuse, confidence 0-100, and a cautious staff tip. " +
+                        "Never recommend automatic bans or kicks."
+                },
+                {
+                    role: "user",
+                    content:
+                        `Server: ${guild.name}\n` +
+                        `Action: ${actionLabel}\n` +
+                        `Count in window: ${count}\n` +
+                        `Executor: ${executor ? `${executor.tag} (${executor.id})` : "unknown"}`
+                }
+            ],
+            {
+                guildId: guild.id,
+                temperature: 0.2,
+                maxTokens: 200
+            }
+        );
+        return analysis || null;
+    } catch (error) {
+        if (error && error.code === "AI_DAILY_LIMIT") {
+            return null;
+        }
+        console.error("[AntiNuke] AI analysis skipped:", error.message || error);
+        return null;
+    }
+}
+
 async function handleDestructiveAction(guild, type, auditLogType, actionLabel) {
     if (!guild) {
         return;
@@ -344,6 +382,26 @@ async function handleDestructiveAction(guild, type, auditLogType, actionLabel) {
         mode: config.mode,
         extra: audit.reason ? `Audit reason: ${audit.reason}` : null
     });
+
+    const aiNote = await analyseWithAI(
+        guild,
+        hitMassDelete ? "MASS DELETION" : actionLabel,
+        hitMassDelete ? massDeleteCount : count,
+        executor
+    );
+    if (aiNote) {
+        addIncident(guild.id, {
+            type: "anti_nuke_ai_note",
+            parentType: incidentType,
+            note: String(aiNote).slice(0, 500)
+        });
+        const logChannel = await resolveLogChannel(guild);
+        if (logChannel) {
+            await logChannel
+                .send(`🤖 **AI note (advisory):** ${String(aiNote).slice(0, 500)}`)
+                .catch(() => {});
+        }
+    }
 
     if (config.mode === "alert" || config.mode === "lockdown") {
         const result = await applySafeResponse(
