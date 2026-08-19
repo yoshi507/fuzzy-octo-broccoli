@@ -3,6 +3,10 @@ const {
 } = require("../utils/translator.js");
 
 const {
+    handleTextInvocation
+} = require("../utils/textCommands.js");
+
+const {
     getChannelSettings
 } = require("../utils/ai/translation.js");
 
@@ -24,9 +28,23 @@ module.exports = {
     name: "messageCreate",
 
     async execute(message) {
-        // Ignore DMs and bots
+        // Ignore DMs and bots (prevents loops / bot chatter)
         if (!message.guild || message.author.bot) {
             return;
+        }
+
+        // =========================
+        // PREFIX / NATURAL INVOCATION
+        // !ping  |  omni ping  |  OmniBot explain ...
+        // =========================
+        let wasInvocation = false;
+        try {
+            wasInvocation = await handleTextInvocation(message);
+        } catch (error) {
+            console.error(
+                "Text invocation error:",
+                error?.message || error
+            );
         }
 
         // =========================
@@ -37,6 +55,7 @@ module.exports = {
             getChannelSettings(message.channel.id);
 
         if (
+            !wasInvocation &&
             translationSettings?.enabled &&
             message.content?.trim()
         ) {
