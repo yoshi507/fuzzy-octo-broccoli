@@ -9,8 +9,7 @@ const {
     EmbedBuilder,
     ActionRowBuilder,
     ButtonBuilder,
-    ButtonStyle,
-    AuditLogEvent
+    ButtonStyle
 } = require("discord.js");
 
 const { loadCommands } = require("./commandHandler");
@@ -45,10 +44,6 @@ const client = new Client({
 
 client.commands = new Collection();
 loadCommands(client);
-
-// =========================
-// LOAD EVENT FILES
-// =========================
 
 const fs = require("fs");
 const path = require("path");
@@ -88,10 +83,6 @@ if (fs.existsSync(eventsPath)) {
 
     console.log(`✅ Loaded ${eventFiles.length} event file(s)`);
 }
-
-// =========================
-// INTERACTIONS
-// =========================
 
 client.on(Events.InteractionCreate, async (interaction) => {
     if (interaction.isButton()) {
@@ -482,210 +473,15 @@ client.on(Events.GuildMemberAdd, async (member) => {
     }
 });
 
-const antiNukeActions = new Map();
+// =========================
+// ANTI-NUKE (module)
+// =========================
 
-async function getAuditLogExecutor(guild, actionType) {
-    try {
-        const logs = await guild.fetchAuditLogs({
-            type: actionType,
-            limit: 5
-        });
+const { registerAntiNukeListeners } = require("./utils/antiNuke.js");
+registerAntiNukeListeners(client);
 
-        const entry = logs.entries.find(
-            e => Date.now() - e.createdTimestamp < 10000
-        );
-
-        return entry?.executor || null;
-    } catch (error) {
-        console.error("Audit log lookup error:", error);
-        return null;
-    }
-}
-
-function recordNukeAction(guildId, type) {
-    const now = Date.now();
-
-    if (!antiNukeActions.has(guildId)) {
-        antiNukeActions.set(guildId, {});
-    }
-
-    const guildActions = antiNukeActions.get(guildId);
-
-    if (!guildActions[type]) {
-        guildActions[type] = [];
-    }
-
-    guildActions[type] = guildActions[type].filter(
-        timestamp => now - timestamp < 30000
-    );
-
-    guildActions[type].push(now);
-
-    return guildActions[type].length;
-}
-
-async function sendAntiNukeAlert(guild, type, count, executor = null) {
-    try {
-        const database = loadDatabase();
-        const logChannelId =
-            database.settings?.[guild.id]?.modLogChannel ||
-            database.logging?.[guild.id]?.channelId;
-
-        if (!logChannelId) {
-            return;
-        }
-
-        const logChannel = guild.channels.cache.get(logChannelId);
-
-        if (!logChannel?.isTextBased()) {
-            return;
-        }
-
-        await logChannel.send(
-            `🚨 **ANTI-NUKE ALERT**\n\n` +
-                `Action: **${type}**\n` +
-                `Detected: **${count} actions in 30 seconds**\n` +
-                `Server: **${guild.name}**\n` +
-                `Executor: **${
-                    executor
-                        ? `${executor.tag} (${executor.id})`
-                        : "Unknown"
-                }**\n\n` +
-                `⚠️ Omni detected potentially destructive activity.`
-        );
-    } catch (error) {
-        console.error("Anti-nuke alert error:", error);
-    }
-}
-
-client.on(Events.ChannelDelete, async (channel) => {
-    try {
-        if (!channel.guild) return;
-
-        const security = getGuildSecurity(channel.guild.id);
-        if (!security.enabled) return;
-
-        const count = recordNukeAction(
-            channel.guild.id,
-            "channelDelete"
-        );
-
-        if (count >= 3) {
-            addIncident(channel.guild.id, {
-                type: "anti_nuke_channel_delete",
-                count
-            });
-
-            const executor = await getAuditLogExecutor(
-                channel.guild,
-                AuditLogEvent.ChannelDelete
-            );
-
-            await sendAntiNukeAlert(
-                channel.guild,
-                "CHANNEL DELETION",
-                count,
-                executor
-            );
-        }
-    } catch (error) {
-        console.error("Anti-nuke channel delete error:", error);
-    }
-});
-
-client.on(Events.RoleDelete, async (role) => {
-    try {
-        const security = getGuildSecurity(role.guild.id);
-        if (!security.enabled) return;
-
-        const count = recordNukeAction(role.guild.id, "roleDelete");
-
-        if (count >= 3) {
-            addIncident(role.guild.id, {
-                type: "anti_nuke_role_delete",
-                count
-            });
-
-            const executor = await getAuditLogExecutor(
-                role.guild,
-                AuditLogEvent.RoleDelete
-            );
-
-            await sendAntiNukeAlert(
-                role.guild,
-                "ROLE DELETION",
-                count,
-                executor
-            );
-        }
-    } catch (error) {
-        console.error("Anti-nuke role delete error:", error);
-    }
-});
-
-client.on(Events.ChannelCreate, async (channel) => {
-    try {
-        if (!channel.guild) return;
-
-        const security = getGuildSecurity(channel.guild.id);
-        if (!security.enabled) return;
-
-        const count = recordNukeAction(
-            channel.guild.id,
-            "channelCreate"
-        );
-
-        if (count >= 5) {
-            addIncident(channel.guild.id, {
-                type: "anti_nuke_channel_create",
-                count
-            });
-
-            const executor = await getAuditLogExecutor(
-                channel.guild,
-                AuditLogEvent.ChannelCreate
-            );
-
-            await sendAntiNukeAlert(
-                channel.guild,
-                "CHANNEL CREATION",
-                count,
-                executor
-            );
-        }
-    } catch (error) {
-        console.error("Anti-nuke channel create error:", error);
-    }
-});
-
-client.on(Events.RoleCreate, async (role) => {
-    try {
-        const security = getGuildSecurity(role.guild.id);
-        if (!security.enabled) return;
-
-        const count = recordNukeAction(role.guild.id, "roleCreate");
-
-        if (count >= 5) {
-            addIncident(role.guild.id, {
-                type: "anti_nuke_role_create",
-                count
-            });
-
-            const executor = await getAuditLogExecutor(
-                role.guild,
-                AuditLogEvent.RoleCreate
-            );
-
-            await sendAntiNukeAlert(
-                role.guild,
-                "ROLE CREATION",
-                count,
-                executor
-            );
-        }
-    } catch (error) {
-        console.error("Anti-nuke role create error:", error);
-    }
-});
+// =========================
+// LOGIN
+// =========================
 
 client.login(process.env.DISCORD_TOKEN);
