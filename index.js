@@ -1,5 +1,12 @@
 require("dotenv").config();
 
+process.on("unhandledRejection", (reason) => {
+    console.error("Unhandled promise rejection:", reason);
+});
+process.on("uncaughtException", (err) => {
+    console.error("Uncaught exception:", err);
+});
+
 const {
     Client,
     GatewayIntentBits,
@@ -625,4 +632,4 @@ client.on(Events.GuildMemberAdd, async (member) => {
 const { registerAntiNukeListeners } = require("./utils/antiNuke.js");
 registerAntiNukeListeners(client);
 
-client.login(process.env.DISCORD_TOKEN);
+require("./startup.js")(client);
