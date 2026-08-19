@@ -71,9 +71,9 @@ module.exports = {
                 {
                     name: "💬 Text & natural commands",
                     value:
-                        "You can also use `!command` or `omni command` (same as slash).\n" +
-                        "Examples: `!ping` · `omni help` · `OmniBot what is leveling?`\n" +
-                        "AI questions via `omni ...` share the daily AI limit.",
+                        "Use `!command`, or mention **omni** / **omnibot** anywhere in a message.\n" +
+                        "Examples: `!ping` · `hey omni help` · `what is leveling OmniBot?`\n" +
+                        "AI questions that mention omni share the daily AI limit.",
                     inline: false
                 }
             )

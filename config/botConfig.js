@@ -7,14 +7,13 @@ module.exports = {
     PREFIX: "!",
 
     /**
-     * Case-insensitive names that invoke Omni when used at the start of a message.
-     * Only matches as the first word (not mid-sentence).
+     * Case-insensitive names that invoke Omni when they appear
+     * anywhere in a message as whole words (not only at the start).
      */
     BOT_INVOKE_NAMES: ["omni", "omnibot"],
 
     /**
-     * If the first token is not a known command, treat the rest as an AI request
-     * when the message was invoked via name or prefix.
+     * If the text after the name is not a known command, treat it as an AI request.
      */
     ALLOW_NATURAL_AI: true
 };
