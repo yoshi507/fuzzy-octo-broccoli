@@ -39,6 +39,25 @@ function readPath(guildId, storagePath) {
   const parts = storagePath.split('.');
   const root = parts[0];
 
+  if (root === 'appeals') {
+    const { getSettings } = require('../../utils/appeals/store.js');
+    let node = getSettings(guildId);
+    for (let i = 1; i < parts.length; i++) {
+      if (node == null) return undefined;
+      node = node[parts[i]];
+    }
+    return node;
+  }
+  if (root === 'quiz') {
+    const { getSettings } = require('../../utils/quiz/store.js');
+    let node = getSettings(guildId);
+    for (let i = 1; i < parts.length; i++) {
+      if (node == null) return undefined;
+      node = node[parts[i]];
+    }
+    return node;
+  }
+
   if (root === 'security') {
     const sec = getGuildSecurity(guildId);
     let node = sec;
@@ -108,21 +127,29 @@ function writePath(guildId, storagePath, value) {
   const parts = storagePath.split('.');
   const root = parts[0];
 
+  if (root === 'appeals') {
+    const { setSettings } = require('../../utils/appeals/store.js');
+    const keys = parts.slice(1);
+    if (keys.length === 1) setSettings(guildId, { [keys[0]]: value });
+    return;
+  }
+  if (root === 'quiz') {
+    const { setSettings } = require('../../utils/quiz/store.js');
+    const keys = parts.slice(1);
+    if (keys.length === 1) setSettings(guildId, { [keys[0]]: value });
+    return;
+  }
+
   if (root === 'security') {
     const sec = getGuildSecurity(guildId);
     let node = sec;
     for (let i = 1; i < parts.length - 1; i++) {
-      if (!node[parts[i]] || typeof node[parts[i]] !== 'object') {
-        node[parts[i]] = {};
-      }
+      if (!node[parts[i]] || typeof node[parts[i]] !== 'object') node[parts[i]] = {};
       node = node[parts[i]];
     }
-    const leaf = parts[parts.length - 1];
     let writeVal = value;
-    if (storagePath === 'security.antiNuke.windowMs') {
-      writeVal = Math.round(Number(value) * 1000);
-    }
-    node[leaf] = writeVal;
+    if (storagePath === 'security.antiNuke.windowMs') writeVal = Math.round(Number(value) * 1000);
+    node[parts[parts.length - 1]] = writeVal;
     setGuildSecurity(guildId, sec);
     return;
   }
@@ -206,10 +233,8 @@ function applyPatch(guildId, patch, user) {
     err.code = 'VALIDATION';
     throw err;
   }
-
   const errors = {};
   const applied = {};
-
   for (const [id, value] of Object.entries(patch)) {
     const def = getSettingById(id);
     const result = validateSetting(def, value);
@@ -219,7 +244,6 @@ function applyPatch(guildId, patch, user) {
     }
     applied[id] = result.value;
   }
-
   if (Object.keys(errors).length) {
     const err = new Error('Validation failed');
     err.status = 400;
@@ -227,12 +251,9 @@ function applyPatch(guildId, patch, user) {
     err.errors = errors;
     throw err;
   }
-
   for (const [id, value] of Object.entries(applied)) {
-    const def = getSettingById(id);
-    writePath(guildId, def.path, value);
+    writePath(guildId, getSettingById(id).path, value);
   }
-
   const hist = loadHistory();
   if (!hist[guildId]) hist[guildId] = [];
   hist[guildId].unshift({
@@ -243,17 +264,11 @@ function applyPatch(guildId, patch, user) {
   });
   hist[guildId] = hist[guildId].slice(0, 50);
   saveHistory(hist);
-
   return getGuildSettings(guildId);
 }
 
 function getHistory(guildId) {
-  const hist = loadHistory();
-  return hist[guildId] || [];
+  return loadHistory()[guildId] || [];
 }
 
-module.exports = {
-  getGuildSettings,
-  applyPatch,
-  getHistory
-};
+module.exports = { getGuildSettings, applyPatch, getHistory };
