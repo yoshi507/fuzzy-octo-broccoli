@@ -2,7 +2,7 @@
  * Final boot: bind PORT early (Wispbyte), then Discord login.
  */
 const { Events } = require("discord.js");
-const { safeError } = require("./utils/processDiagnostics.js");
+const { safeError, activeResourceSummary } = require("./utils/processDiagnostics.js");
 
 function describeToken(raw) {
     if (raw == null || raw === "") {
@@ -77,12 +77,18 @@ module.exports = function boot(client) {
         if (httpServer) {
             global.__omnibotHttpServer = httpServer;
             console.log("[DIAG] HTTP server handle stored; event loop should stay active");
+            console.log("[DIAG] resources after listen call:", JSON.stringify(activeResourceSummary()));
         } else {
             console.warn("[DIAG] HTTP server was not started (PORT missing or invalid?)");
-            console.warn(`[DIAG] PORT raw type=${typeof process.env.PORT} finite=${Number.isFinite(Number(process.env.PORT))}`);
+            console.warn(
+                `[DIAG] PORT raw type=${typeof process.env.PORT} finite=${Number.isFinite(Number(process.env.PORT))}`
+            );
         }
     } catch (error) {
-        console.error("[DIAG] Failed to start API server at boot:", JSON.stringify(safeError(error), null, 2));
+        console.error(
+            "[DIAG] Failed to start API server at boot:",
+            JSON.stringify(safeError(error), null, 2)
+        );
     }
 
     attachClientDiagnostics(client);
@@ -103,8 +109,7 @@ module.exports = function boot(client) {
         const ready = Boolean(client.readyAt);
         const guilds = client.guilds?.cache?.size ?? 0;
         const listening =
-            global.__omnibotHttpServer &&
-            global.__omnibotHttpServer.listening;
+            global.__omnibotHttpServer && global.__omnibotHttpServer.listening;
         console.log(
             `[OmniBot] heartbeat: discord=${ready ? "ready" : "not-ready"} guilds=${guilds} apiListening=${Boolean(listening)}`
         );
@@ -113,7 +118,7 @@ module.exports = function boot(client) {
 
     setTimeout(() => {
         console.log(
-            `[DIAG] post-login tick: readyAt=${Boolean(client.readyAt)} wsStatus=${client.ws?.status}`
+            `[DIAG] post-login tick: readyAt=${Boolean(client.readyAt)} wsStatus=${client.ws?.status} resources=${JSON.stringify(activeResourceSummary())}`
         );
     }, 2000);
 
@@ -123,7 +128,10 @@ module.exports = function boot(client) {
             console.log("✅ Discord gateway login accepted (waiting for ready)…");
         },
         (error) => {
-            console.error("❌ Discord login failed:", JSON.stringify(safeError(error), null, 2));
+            console.error(
+                "❌ Discord login failed:",
+                JSON.stringify(safeError(error), null, 2)
+            );
             const msg = (error && error.message) || "";
             if (/token/i.test(msg) || error?.code === "TokenInvalid") {
                 console.error(

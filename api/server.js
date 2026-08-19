@@ -68,21 +68,22 @@ function createApiApp(discordClient) {
 
   app.use(generalLimiter);
 
-  function healthPayload(req) {
+  app.get('/health', (req, res) => {
     const client = req.app.locals.discordClient;
-    return {
+    res.json({
       ok: true,
-      service: 'omnibot',
       botReady: Boolean(client?.readyAt),
       guilds: client?.guilds?.cache?.size ?? 0,
       timestamp: new Date().toISOString()
-    };
-  }
-  app.get('/', (req, res) => {
-    res.status(200).json(healthPayload(req));
+    });
   });
-  app.get('/health', (req, res) => {
-    res.status(200).json(healthPayload(req));
+
+  app.get('/', (req, res) => {
+    res.status(200).json({
+      ok: true,
+      service: 'OmniBot API',
+      health: '/health'
+    });
   });
 
   app.use('/auth', authLimiter, authRoutes);
@@ -117,6 +118,10 @@ function startApiServer(discordClient) {
     activeApp = createApiApp(discordClient);
     activeServer = activeApp.listen(port, '0.0.0.0', () => {
       console.log(`🌐 OmniBot API listening on 0.0.0.0:${port}`);
+      try {
+        const { activeResourceSummary } = require('../utils/processDiagnostics.js');
+        console.log('[DIAG] resources after listening callback:', JSON.stringify(activeResourceSummary()));
+      } catch (_) {}
     });
 
     activeServer.on('error', (err) => {
