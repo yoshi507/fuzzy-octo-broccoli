@@ -3,7 +3,11 @@ const {
 } = require("discord.js");
 
 const {
-    askAI
+    askAI,
+    limitReachedMessage,
+    isLimitError,
+    getRemaining,
+    DAILY_LIMIT
 } = require("../utils/ai/groq.js");
 
 const {
@@ -99,12 +103,8 @@ You are talking to a user in a Discord server.`
                 );
             }
         } catch (error) {
-            if (error.code === "AI_DAILY_LIMIT") {
-                return interaction.editReply(
-                    "🚫 **Daily AI limit reached.**\n\n" +
-                    "This server has used all 20 AI requests for today. " +
-                    "The limit resets tomorrow."
-                );
+            if (isLimitError(error)) {
+                return interaction.editReply(limitReachedMessage());
             }
 
             console.error("Chat command error:", error);

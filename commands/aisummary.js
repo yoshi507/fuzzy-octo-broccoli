@@ -1,117 +1,103 @@
+const { SlashCommandBuilder } = require("discord.js");
 const {
-    SlashCommandBuilder
-} = require("discord.js");
-
-const {
-    askAI
+    askAI,
+    limitReachedMessage,
+    isLimitError,
+    getRemaining,
+    DAILY_LIMIT
 } = require("../utils/ai/groq.js");
 
 module.exports = {
     data: new SlashCommandBuilder()
         .setName("aisummary")
-        .setDescription(
-            "Get an AI summary of recent channel activity"
+        .setDescription("Get an AI summary of recent channel activity")
+        .addIntegerOption(option =>
+            option
+                .setName("messages")
+                .setDescription("How many recent messages to scan (default 40, max 80)")
+                .setMinValue(10)
+                .setMaxValue(80)
+                .setRequired(false)
         ),
 
     async execute(interaction) {
-
+        const limit = interaction.options.getInteger("messages") || 40;
         await interaction.deferReply();
 
         try {
+            const messages = await interaction.channel.messages.fetch({
+                limit
+            });
 
-            const messages =
-                await interaction.channel.messages.fetch({
-                    limit: 50
-                });
+            const sorted = [...messages.values()].sort(
+                (a, b) => a.createdTimestamp - b.createdTimestamp
+            );
 
-            const sorted =
-                [...messages.values()]
-                    .sort(
-                        (a, b) =>
-                            a.createdTimestamp -
-                            b.createdTimestamp
-                    );
+            const usable = sorted.filter(
+                message =>
+                    !message.author.bot &&
+                    message.content &&
+                    message.content.trim().length > 0
+            );
 
-            const usable =
-                sorted.filter(
-                    message =>
-                        !message.author.bot &&
-                        message.content.trim().length > 0
-                );
-
-            if (usable.length === 0) {
-
+            if (usable.length < 3) {
                 return interaction.editReply(
                     "📭 There aren't enough recent messages to summarise."
                 );
             }
 
-            const transcript =
-                usable
-                    .map(
-                        message =>
-                            `${message.author.username}: ${message.content}`
-                    )
-                    .join("\n");
-
-            const prompt = `
-Summarise the recent Discord conversation below for someone who has just joined the channel.
-
-Rules:
-- Explain the main topics being discussed.
-- Mention important decisions, events or information.
-- Do not invent anything.
-- Ignore greetings and meaningless messages.
-- Do not quote long messages.
-- Keep it concise and easy to read.
-- Use bullet points.
-- End with a short sentence explaining what people are currently talking about.
-
-Conversation:
-
-${transcript}
-`;
+            const transcript = usable
+                .slice(-40)
+                .map(
+                    message =>
+                        `${message.author.username}: ${message.content.slice(0, 300)}`
+                )
+                .join("\n");
 
             const summary = await askAI(
-    [
-        {
-            role: "system",
-            content:
-                "You summarise Discord conversations accurately and concisely."
-        },
-        {
-            role: "user",
-            content: prompt
-        }
-    ],
-    {
-        guildId: interaction.guild.id,
-        temperature: 0.3,
-        maxTokens: 800
-    }
-);
+                [
+                    {
+                        role: "system",
+                        content:
+                            "You summarise Discord conversations accurately and concisely. Never invent details."
+                    },
+                    {
+                        role: "user",
+                        content:
+                            "Summarise this Discord conversation for someone who just joined.\n" +
+                            "Rules:\n" +
+                            "- Main topics only\n" +
+                            "- Important decisions or events\n" +
+                            "- Ignore greetings and noise\n" +
+                            "- Use short bullet points\n" +
+                            "- End with one sentence on the current topic\n\n" +
+                            `Conversation:\n${transcript}`
+                    }
+                ],
+                {
+                    guildId: interaction.guild.id,
+                    temperature: 0.3,
+                    maxTokens: 700
+                }
+            );
 
             if (!summary) {
-
-                return interaction.editReply(
-                    "❌ I couldn't create a summary."
-                );
+                return interaction.editReply("❌ I couldn't create a summary.");
             }
 
-            await interaction.editReply(
-                `🧠 **While you were away...**\n\n${summary}`
-            );
+            const remaining = getRemaining(interaction.guild.id);
+            const body =
+                summary.length > 1800 ? summary.slice(0, 1800) + "…" : summary;
 
+            await interaction.editReply(
+                `🧠 **Channel summary**\n\n${body}\n\n_AI requests left today: **${remaining}/${DAILY_LIMIT}**_`
+            );
         } catch (error) {
-
-            console.error(
-                "AI Summary error:",
-                error
-            );
-
-            await interaction.editReply(
-                "❌ I couldn't summarise this channel."
-            );
+            if (isLimitError(error)) {
+                return interaction.editReply(limitReachedMessage());
+            }
+            console.error("AI Summary error:", error);
+            await interaction.editReply("❌ I couldn't summarise this channel.");
         }
     }
 };
