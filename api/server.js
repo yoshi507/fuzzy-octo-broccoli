@@ -6,6 +6,7 @@ const { router: guildRoutes } = require('./routes/guilds');
 const settingsRoutes = require('./routes/settings');
 const { botRouter, statsRouter } = require('./routes/bot');
 const { notFound, errorHandler } = require('./middleware/errors');
+const publicAppealsRoutes = require('./routes/publicAppeals');
 
 /** @type {import('http').Server | null} */
 let activeServer = null;
@@ -79,11 +80,7 @@ function createApiApp(discordClient) {
   });
 
   app.get('/', (req, res) => {
-    res.status(200).json({
-      ok: true,
-      service: 'OmniBot API',
-      health: '/health'
-    });
+    res.json({ ok: true, service: 'OmniBot API', health: '/health' });
   });
 
   app.use('/auth', authLimiter, authRoutes);
@@ -91,6 +88,7 @@ function createApiApp(discordClient) {
   app.use('/guilds/:guildId/settings', settingsRoutes);
   app.use('/guilds/:guildId/bot', botRouter);
   app.use('/guilds/:guildId/stats', statsRouter);
+  app.use('/appeals', publicAppealsRoutes);
 
   app.use(notFound);
   app.use(errorHandler);
