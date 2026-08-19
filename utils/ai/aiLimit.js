@@ -33,9 +33,6 @@ function getToday() {
     return new Date().toISOString().slice(0, 10);
 }
 
-/**
- * Next UTC midnight when the daily counter resets.
- */
 function getResetAt() {
     const now = new Date();
     return new Date(
@@ -51,9 +48,6 @@ function getResetAt() {
     );
 }
 
-/**
- * Human-readable time until reset (e.g. "in about 3 hours and 12 minutes").
- */
 function getResetDescription() {
     const ms = Math.max(0, getResetAt().getTime() - Date.now());
     const totalMinutes = Math.ceil(ms / 60000);
@@ -80,13 +74,27 @@ function normalizeGuildEntry(limits, guildId) {
     return limits[guildId];
 }
 
+function getGuildDailyLimit(guildId) {
+    if (!guildId) return DAILY_LIMIT;
+    try {
+        const { loadDatabase } = require("../../database/database.js");
+        const db = loadDatabase();
+        const override = db.dashboard?.[guildId]?.ai?.dailyLimit;
+        const n = Number(override);
+        if (Number.isFinite(n) && n >= 1 && n <= 500) return Math.floor(n);
+    } catch {
+        /* keep default */
+    }
+    return DAILY_LIMIT;
+}
+
 function canUseAI(guildId) {
     if (!guildId) {
         return true;
     }
     const limits = loadLimits();
     const entry = normalizeGuildEntry(limits, guildId);
-    return entry.count < DAILY_LIMIT;
+    return entry.count < getGuildDailyLimit(guildId);
 }
 
 function useAI(guildId) {
@@ -100,35 +108,38 @@ function useAI(guildId) {
 }
 
 function getRemaining(guildId) {
+    const limit = getGuildDailyLimit(guildId);
     if (!guildId) {
-        return DAILY_LIMIT;
+        return limit;
     }
     const limits = loadLimits();
     const entry = normalizeGuildEntry(limits, guildId);
-    return Math.max(0, DAILY_LIMIT - entry.count);
+    return Math.max(0, limit - entry.count);
 }
 
 function getUsage(guildId) {
+    const limit = getGuildDailyLimit(guildId);
     if (!guildId) {
         return {
             used: 0,
-            remaining: DAILY_LIMIT,
-            limit: DAILY_LIMIT,
+            remaining: limit,
+            limit,
             resetAt: getResetAt(),
             resetDescription: getResetDescription()
         };
     }
     const remaining = getRemaining(guildId);
     return {
-        used: DAILY_LIMIT - remaining,
+        used: limit - remaining,
         remaining,
-        limit: DAILY_LIMIT,
+        limit,
         resetAt: getResetAt(),
         resetDescription: getResetDescription()
     };
 }
 
 module.exports = {
+    getGuildDailyLimit,
     DAILY_LIMIT,
     canUseAI,
     useAI,
