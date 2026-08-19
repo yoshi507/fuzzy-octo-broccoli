@@ -6,9 +6,9 @@ const {
     askAI,
     limitReachedMessage,
     isLimitError,
-    getRemaining,
-    DAILY_LIMIT
+    replyAiError
 } = require("../utils/ai/groq.js");
+const { canUseAI } = require("../utils/ai/aiLimit.js");
 
 const {
     getConversation,
@@ -31,6 +31,10 @@ module.exports = {
 
         await interaction.deferReply();
 
+        if (!canUseAI(interaction.guild.id)) {
+            return interaction.editReply(limitReachedMessage(interaction.guild.id));
+        }
+
         try {
             const history = getConversation(
                 interaction.guild.id,
@@ -40,18 +44,7 @@ module.exports = {
             const messages = [
                 {
                     role: "system",
-                    content: `You are Omni, a chill, friendly and helpful Discord bot.
-
-Personality:
-- Chill and natural
-- Friendly
-- Can joke around when appropriate
-- Helpful without being overly formal
-- Keep normal responses reasonably concise
-- Remember the conversation context provided to you
-- Never claim to be human
-
-You are talking to a user in a Discord server.`
+                    content: `You are Omni, a chill, friendly and helpful Discord bot.\n\nPersonality:\n- Chill and natural\n- Friendly\n- Can joke around when appropriate\n- Helpful without being overly formal\n- Keep normal responses reasonably concise\n- Remember the conversation context provided to you\n- Never claim to be human\n\nYou are talking to a user in a Discord server.`
                 },
                 ...history.map(item => ({
                     role: item.role,
@@ -103,15 +96,7 @@ You are talking to a user in a Discord server.`
                 );
             }
         } catch (error) {
-            if (isLimitError(error)) {
-                return interaction.editReply(limitReachedMessage());
-            }
-
-            console.error("Chat command error:", error);
-
-            await interaction.editReply(
-                "❌ I couldn't talk to the AI right now."
-            );
+            return replyAiError(interaction, error, interaction.guild?.id);
         }
     }
 };
