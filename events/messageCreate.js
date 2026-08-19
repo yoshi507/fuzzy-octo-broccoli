@@ -1,5 +1,6 @@
 const {
-    translateText
+    translateText,
+    resolveLanguageCode
 } = require("../utils/translator.js");
 
 const {
@@ -28,15 +29,10 @@ module.exports = {
     name: "messageCreate",
 
     async execute(message) {
-        // Ignore DMs and bots (prevents loops / bot chatter)
         if (!message.guild || message.author.bot) {
             return;
         }
 
-        // =========================
-        // PREFIX / NATURAL INVOCATION
-        // !ping  |  omni ping  |  OmniBot explain ...
-        // =========================
         let wasInvocation = false;
         try {
             wasInvocation = await handleTextInvocation(message);
@@ -47,10 +43,6 @@ module.exports = {
             );
         }
 
-        // =========================
-        // AUTO TRANSLATION (non-AI)
-        // =========================
-
         const translationSettings =
             getChannelSettings(message.channel.id);
 
@@ -60,31 +52,43 @@ module.exports = {
             message.content?.trim()
         ) {
             try {
-                const translationResult = await translateText(
-                    message.content,
-                    translationSettings.language
-                );
-                const translation = translationResult?.text;
-
-                if (translation) {
-                    await message.reply(
-                        `🌍 **${translationSettings.language}:** ${translation}`
+                const content = message.content.trim();
+                if (
+                    content.startsWith("🌍") ||
+                    content.length < 2 ||
+                    content.length > 1500
+                ) {
+                    // skip noise / loops
+                } else if (!resolveLanguageCode(translationSettings.language)) {
+                    console.warn(
+                        "AutoTranslate: unsupported language:",
+                        translationSettings.language
                     );
+                } else {
+                    const translationResult = await translateText(
+                        content,
+                        translationSettings.language
+                    );
+                    const translation = translationResult?.text;
+                    if (
+                        translation &&
+                        translation.trim().toLowerCase() !== content.toLowerCase()
+                    ) {
+                        await message.reply({
+                            content: `🌍 **${translationSettings.language}:** ${translation}`,
+                            allowedMentions: { repliedUser: false }
+                        });
+                    }
                 }
             } catch (error) {
-                console.error("Auto translation error:", error.message || error);
+                console.error(
+                    "Auto translation error:",
+                    error?.code || error?.message || error
+                );
             }
         }
 
-        // =========================
-        // DATABASE
-        // =========================
-
         const database = loadDatabase();
-
-        // =========================
-        // AUTOMOD
-        // =========================
 
         const automod = database.automod?.[message.guild.id];
 
@@ -122,10 +126,6 @@ module.exports = {
                     setTimeout(() => {
                         warning.delete().catch(() => {});
                     }, 5000);
-
-                    console.log(
-                        `AutoMod removed a message from ${message.author.tag}`
-                    );
                 } catch (error) {
                     console.error("AutoMod error:", error);
                 }
@@ -133,10 +133,6 @@ module.exports = {
                 return;
             }
         }
-
-        // =========================
-        // ANTI-SPAM
-        // =========================
 
         if (!database.spam) {
             database.spam = {};
@@ -229,10 +225,6 @@ module.exports = {
 
             return;
         }
-
-        // =========================
-        // LEVELING
-        // =========================
 
         const settings = database.levelSettings?.[message.guild.id];
 
