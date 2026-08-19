@@ -3,18 +3,27 @@ const {
     resolveBetAmount,
     placeBet,
     addCoins,
-    recordGame
+    recordGame,
+    getBalance
 } = require("../utils/economy.js");
+
+function normalizeSide(raw) {
+    if (raw == null || raw === "") return null;
+    const s = String(raw).trim().toLowerCase();
+    if (["h", "head", "heads"].includes(s)) return "heads";
+    if (["t", "tail", "tails"].includes(s)) return "tails";
+    return null;
+}
 
 module.exports = {
     data: new SlashCommandBuilder()
         .setName("coinflip")
-        .setDescription("Flip a coin and bet OmniCoins")
+        .setDescription("Flip a coin — optionally bet OmniCoins")
         .addStringOption(o =>
             o
                 .setName("side")
-                .setDescription("Heads or tails")
-                .setRequired(true)
+                .setDescription("Heads or tails (optional for fun flips)")
+                .setRequired(false)
                 .addChoices(
                     { name: "Heads", value: "heads" },
                     { name: "Tails", value: "tails" }
@@ -23,16 +32,50 @@ module.exports = {
         .addStringOption(o =>
             o
                 .setName("amount")
-                .setDescription("Bet amount (or 'all')")
-                .setRequired(true)
+                .setDescription("Bet amount or 'all' (optional)")
+                .setRequired(false)
         ),
 
     async execute(interaction) {
-        const side = interaction.options.getString("side");
+        const sideRaw = interaction.options.getString("side");
+        const amountRaw = interaction.options.getString("amount");
+        const side = normalizeSide(sideRaw);
+
+        if (!amountRaw && !sideRaw) {
+            const result = Math.random() < 0.5 ? "heads" : "tails";
+            return interaction.reply(`🪙 The coin landed on **${result}**!`);
+        }
+
+        if (!amountRaw && side) {
+            const result = Math.random() < 0.5 ? "heads" : "tails";
+            const win = result === side;
+            return interaction.reply(
+                win
+                    ? `🪙 **${result}** — you called it!`
+                    : `🪙 **${result}** — better luck next time (you picked **${side}**).`
+            );
+        }
+
+        if (!side) {
+            return interaction.reply({
+                content:
+                    "❌ Pick a side: **heads** or **tails**.\n" +
+                    "Examples: `/coinflip side:Heads amount:10` · `!coinflip heads 10` · `omni coinflip tails 5`",
+                ephemeral: true
+            });
+        }
+
+        if (!interaction.guild) {
+            return interaction.reply({
+                content: "❌ Coinflip bets only work in a server.",
+                ephemeral: true
+            });
+        }
+
         const resolved = resolveBetAmount(
             interaction.guild.id,
             interaction.user.id,
-            interaction.options.getString("amount")
+            amountRaw
         );
 
         if (!resolved.ok) {
@@ -41,7 +84,7 @@ module.exports = {
                     ? `❌ Not enough coins (you have **${resolved.coins}**).`
                     : resolved.reason === "max_bet"
                       ? `❌ Max bet is **${resolved.max}**.`
-                      : `❌ Invalid bet (min **${resolved.min || 1}**).`;
+                      : `❌ Invalid bet amount (min **${resolved.min || 1}**). Try a number or \`all\`.`;
             return interaction.reply({ content: msg, ephemeral: true });
         }
 
@@ -52,7 +95,7 @@ module.exports = {
         );
         if (!bet.ok) {
             return interaction.reply({
-                content: "❌ Could not place bet.",
+                content: "❌ Could not place that bet. Try again.",
                 ephemeral: true
             });
         }
@@ -62,7 +105,11 @@ module.exports = {
 
         if (win) {
             const payout = bet.bet * 2;
-            const added = addCoins(interaction.guild.id, interaction.user.id, payout);
+            const added = addCoins(
+                interaction.guild.id,
+                interaction.user.id,
+                payout
+            );
             recordGame(interaction.guild.id, interaction.user.id, {
                 wagered: bet.bet,
                 won: payout,
@@ -80,10 +127,11 @@ module.exports = {
             won: 0,
             win: false
         });
+        const bal = getBalance(interaction.guild.id, interaction.user.id);
         return interaction.reply(
             `🪙 The coin landed on **${result}**.\n` +
                 `You lost **${bet.bet.toLocaleString()}** coins.\n` +
-                `💰 Balance: **${bet.coins.toLocaleString()}**`
+                `💰 Balance: **${bal.coins.toLocaleString()}**`
         );
     }
 };
