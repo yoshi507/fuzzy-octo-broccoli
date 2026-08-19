@@ -57,6 +57,13 @@ module.exports = {
                     inline: false
                 },
                 {
+                    name: "🎮 Games & Economy",
+                    value:
+                        "`/balance` `/daily` `/work` `/pay` `/shop` `/buy` `/inventory` `/rich`\n" +
+                        "`/coinflip` `/dice` `/rps` `/slots` `/trivia` `/guessnumber` `/higherlower`",
+                    inline: false
+                },
+                {
                     name: "🔧 Utility",
                     value: "`/ping` `/help` `/translate` `/autotranslate`",
                     inline: false
