@@ -117,10 +117,10 @@ function addMessage(
         timestamp: Date.now()
     });
 
-    // Keep only the latest 20 messages
-    if (memory[key].length > 20) {
+    // Keep only the latest 12 messages to limit AI context size
+    if (memory[key].length > 12) {
         memory[key] =
-            memory[key].slice(-20);
+            memory[key].slice(-12);
     }
 
     saveMemory(memory);
