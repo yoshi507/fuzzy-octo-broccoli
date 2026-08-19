@@ -6,9 +6,9 @@ const {
     askAI,
     limitReachedMessage,
     isLimitError,
-    getRemaining,
-    DAILY_LIMIT
+    replyAiError
 } = require("../utils/ai/groq.js");
+const { canUseAI } = require("../utils/ai/aiLimit.js");
 
 module.exports = {
     data: new SlashCommandBuilder()
@@ -26,25 +26,16 @@ module.exports = {
 
         await interaction.deferReply();
 
+        if (!canUseAI(interaction.guild.id)) {
+            return interaction.editReply(limitReachedMessage(interaction.guild.id));
+        }
+
         try {
             const response = await askAI(
                 [
                     {
                         role: "system",
-                        content: `You are Omni, a friendly Discord bot.
-
-Your personality:
-- Chill
-- Friendly
-- Funny when appropriate
-- Helpful
-- Natural and conversational
-- Do not sound robotic
-- Keep responses reasonably concise
-- Never pretend to be human
-- Respect Discord rules and server rules
-
-You are being used inside a Discord server.`
+                        content: `You are Omni, a friendly Discord bot.\n\nYour personality:\n- Chill\n- Friendly\n- Funny when appropriate\n- Helpful\n- Natural and conversational\n- Do not sound robotic\n- Keep responses reasonably concise\n- Never pretend to be human\n- Respect Discord rules and server rules\n\nYou are being used inside a Discord server.`
                     },
                     {
                         role: "user",
@@ -76,15 +67,7 @@ You are being used inside a Discord server.`
                 await interaction.followUp(response.slice(i, i + maxLength));
             }
         } catch (error) {
-            if (isLimitError(error)) {
-                return interaction.editReply(limitReachedMessage());
-            }
-
-            console.error("AI command error:", error);
-
-            await interaction.editReply(
-                "❌ I couldn't reach Omni's AI right now."
-            );
+            return replyAiError(interaction, error, interaction.guild?.id);
         }
     }
 };
