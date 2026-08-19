@@ -6,7 +6,7 @@
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "start": "node index.js",
-    "test:api": "node api/tests/smoke.js"
+    "test:api": "node api/tests/smoke.js && node api/tests/integration.js"
   },
   "keywords": [],
   "author": "",

@@ -7,14 +7,22 @@ function notFound(req, res) {
 }
 
 function errorHandler(err, req, res, next) {
-  const status = err.status || 500;
-  const code = err.code || 'INTERNAL_ERROR';
-  const message =
-    status >= 500
-      ? 'An internal error occurred'
-      : err.message || 'Request failed';
+  if (err instanceof SyntaxError && 'body' in err) {
+    return res.status(400).json({
+      error: true,
+      code: 'VALIDATION',
+      message: 'Invalid JSON body'
+    });
+  }
 
-  if (status >= 500) {
+  const status = err.status || 500;
+  const code = err.code || (status === 500 ? 'INTERNAL_ERROR' : 'ERROR');
+  const isOpaqueServerError = status === 500;
+  const message = isOpaqueServerError
+    ? 'An internal error occurred'
+    : (err.message || 'Request failed');
+
+  if (isOpaqueServerError) {
     console.error('API error:', err?.code || err?.message || err);
   }
 

@@ -18,7 +18,7 @@ function parseAllowedOrigins() {
   return [...new Set([...defaults, ...fromEnv])];
 }
 
-function startApiServer(discordClient) {
+function createApiApp(discordClient) {
   const app = express();
   app.locals.discordClient = discordClient;
   app.set('trust proxy', 1);
@@ -81,18 +81,20 @@ function startApiServer(discordClient) {
 
   app.use(notFound);
   app.use(errorHandler);
+  return app;
+}
 
+function startApiServer(discordClient) {
+  const app = createApiApp(discordClient);
   const port = Number(process.env.PORT);
   if (!Number.isFinite(port) || port <= 0) {
     console.warn('⚠️ API server not started: set PORT environment variable for the dashboard API (Wispbyte provides this).');
     return null;
   }
-
   const server = app.listen(port, () => {
     console.log(`🌐 OmniBot API listening on port ${port}`);
   });
-
   return server;
 }
 
-module.exports = { startApiServer };
+module.exports = { startApiServer, createApiApp };
