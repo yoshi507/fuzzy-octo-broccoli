@@ -41,6 +41,23 @@ const SETTINGS = [
   { id: 'translation.note', type: 'boolean', default: false, path: 'dashboard.translation.hint' },
   { id: 'server.suggestionsChannel', type: 'channel', default: null, path: 'settings.suggestionsChannel' },
   { id: 'server.announcementRole', type: 'role', default: null, path: 'settings.announcementRole' },
+  { id: 'appeals.enabled', type: 'boolean', default: false, path: 'appeals.enabled' },
+  { id: 'appeals.channel', type: 'channel', default: null, path: 'appeals.channelId' },
+  { id: 'appeals.staffRoles', type: 'multiselect', default: [], path: 'appeals.staffRoleIds' },
+  { id: 'appeals.cooldownHours', type: 'number', default: 72, min: 1, max: 720, path: 'appeals.cooldownHours' },
+  { id: 'appeals.acceptMessage', type: 'string', default: 'Your appeal has been accepted.', maxLength: 1500, path: 'appeals.acceptMessage' },
+  { id: 'appeals.rejectMessage', type: 'string', default: 'Your appeal has been rejected.', maxLength: 1500, path: 'appeals.rejectMessage' },
+  { id: 'appeals.pendingMessage', type: 'string', default: 'Your appeal was submitted and is awaiting review.', maxLength: 1500, path: 'appeals.pendingMessage' },
+  { id: 'appeals.logEnabled', type: 'boolean', default: true, path: 'appeals.logEnabled' },
+  { id: 'quiz.enabled', type: 'boolean', default: true, path: 'quiz.enabled' },
+  { id: 'quiz.channel', type: 'channel', default: null, path: 'quiz.channelId' },
+  { id: 'quiz.questionCount', type: 'number', default: 5, min: 1, max: 20, path: 'quiz.questionCount' },
+  { id: 'quiz.timeLimitSeconds', type: 'number', default: 20, min: 5, max: 120, path: 'quiz.timeLimitSeconds' },
+  { id: 'quiz.pointsCorrect', type: 'number', default: 10, min: 1, max: 100, path: 'quiz.pointsCorrect' },
+  { id: 'quiz.streakBonus', type: 'number', default: 2, min: 0, max: 50, path: 'quiz.streakBonus' },
+  { id: 'quiz.cooldownSeconds', type: 'number', default: 30, min: 0, max: 600, path: 'quiz.cooldownSeconds' },
+  { id: 'quiz.rewardsEnabled', type: 'boolean', default: true, path: 'quiz.rewardsEnabled' },
+  { id: 'quiz.leaderboardEnabled', type: 'boolean', default: true, path: 'quiz.leaderboardEnabled' },
 ];
 
 function getSettingById(id) {
