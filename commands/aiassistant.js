@@ -3,9 +3,11 @@ const {
     askAI,
     limitReachedMessage,
     isLimitError,
-    getRemaining,
-    DAILY_LIMIT
+    replyAiError,
+    DAILY_LIMIT,
+    getRemaining
 } = require("../utils/ai/groq.js");
+const { canUseAI } = require("../utils/ai/aiLimit.js");
 
 module.exports = {
     data: new SlashCommandBuilder()
@@ -21,6 +23,10 @@ module.exports = {
     async execute(interaction) {
         const question = interaction.options.getString("question");
         await interaction.deferReply();
+
+        if (!canUseAI(interaction.guild.id)) {
+            return interaction.editReply(limitReachedMessage(interaction.guild.id));
+        }
 
         try {
             const guild = interaction.guild;
@@ -83,11 +89,7 @@ module.exports = {
                 `${text}\n\n_AI requests left today: **${remaining}/${DAILY_LIMIT}**_`
             );
         } catch (error) {
-            if (isLimitError(error)) {
-                return interaction.editReply(limitReachedMessage());
-            }
-            console.error("aiassistant error:", error);
-            await interaction.editReply("❌ I couldn't answer right now.");
+            return replyAiError(interaction, error, interaction.guild?.id);
         }
     }
 };
