@@ -1,6 +1,7 @@
 /**
- * Starts the dashboard REST API when OmniBot is online.
- * Uses PORT from the environment (Wispbyte).
+ * Attach the live Discord client to the API after login.
+ * The HTTP server itself should already be listening on PORT from index.js startup
+ * (required for Wispbyte / process keep-alive).
  */
 module.exports = {
     name: "clientReady",
@@ -8,11 +9,13 @@ module.exports = {
 
     execute(readyClient) {
         try {
-            const { startApiServer } = require("../api/server.js");
+            const { startApiServer, setDiscordClient } = require("../api/server.js");
+            setDiscordClient(readyClient);
             startApiServer(readyClient);
+            console.log("✅ Dashboard API linked to Discord client");
         } catch (error) {
             console.error(
-                "Failed to start API server:",
+                "Failed to link API server:",
                 error?.message || error
             );
         }

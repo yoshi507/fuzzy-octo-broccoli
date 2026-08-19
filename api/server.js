@@ -7,6 +7,11 @@ const settingsRoutes = require('./routes/settings');
 const { botRouter, statsRouter } = require('./routes/bot');
 const { notFound, errorHandler } = require('./middleware/errors');
 
+/** @type {import('http').Server | null} */
+let activeServer = null;
+/** @type {import('express').Express | null} */
+let activeApp = null;
+
 function parseAllowedOrigins() {
   const raw = process.env.DASHBOARD_ORIGINS || process.env.DASHBOARD_ORIGIN || '';
   const defaults = [
@@ -20,7 +25,7 @@ function parseAllowedOrigins() {
 
 function createApiApp(discordClient) {
   const app = express();
-  app.locals.discordClient = discordClient;
+  app.locals.discordClient = discordClient || null;
   app.set('trust proxy', 1);
   app.disable('x-powered-by');
 
@@ -64,7 +69,7 @@ function createApiApp(discordClient) {
   app.use(generalLimiter);
 
   app.get('/health', (req, res) => {
-    const client = discordClient;
+    const client = req.app.locals.discordClient;
     res.json({
       ok: true,
       botReady: Boolean(client?.readyAt),
@@ -84,17 +89,51 @@ function createApiApp(discordClient) {
   return app;
 }
 
+/**
+ * Start (or re-bind client on) the dashboard API.
+ * Binds process.env.PORT immediately so hosts like Wispbyte keep the process alive.
+ * Safe to call multiple times — only one listener is created.
+ */
 function startApiServer(discordClient) {
-  const app = createApiApp(discordClient);
+  if (activeApp && discordClient) {
+    activeApp.locals.discordClient = discordClient;
+  }
+
+  if (activeServer) {
+    return activeServer;
+  }
+
   const port = Number(process.env.PORT);
   if (!Number.isFinite(port) || port <= 0) {
-    console.warn('⚠️ API server not started: set PORT environment variable for the dashboard API (Wispbyte provides this).');
+    console.warn(
+      '⚠️ API server not started: set PORT environment variable for the dashboard API (Wispbyte provides this).'
+    );
     return null;
   }
-  const server = app.listen(port, () => {
-    console.log(`🌐 OmniBot API listening on port ${port}`);
-  });
-  return server;
+
+  try {
+    activeApp = createApiApp(discordClient);
+    activeServer = activeApp.listen(port, '0.0.0.0', () => {
+      console.log(`🌐 OmniBot API listening on 0.0.0.0:${port}`);
+    });
+
+    activeServer.on('error', (err) => {
+      console.error('❌ API server error:', err?.code || err?.message || err);
+    });
+
+    return activeServer;
+  } catch (err) {
+    console.error('❌ Failed to start API server:', err?.message || err);
+    activeApp = null;
+    activeServer = null;
+    return null;
+  }
 }
 
-module.exports = { startApiServer, createApiApp };
+function setDiscordClient(discordClient) {
+  if (activeApp) {
+    activeApp.locals.discordClient = discordClient;
+  }
+}
+
+module.exports = { startApiServer, createApiApp, setDiscordClient };
