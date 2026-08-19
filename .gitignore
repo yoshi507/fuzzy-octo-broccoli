@@ -1,2 +1,10 @@
 .env
+.env.*
+!.env.example
 node_modules/
+OmniBot.zip
+*.log
+data/*.tmp
+data/economy.json
+data/ai-limits.json
+data/ai-memory.json

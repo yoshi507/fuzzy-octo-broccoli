@@ -5,6 +5,7 @@ function loadCommands(client) {
     const commandsPath = path.join(__dirname, "commands");
 
     if (!fs.existsSync(commandsPath)) {
+        console.warn("⚠️ commands folder not found");
         return;
     }
 
@@ -12,16 +13,29 @@ function loadCommands(client) {
         .readdirSync(commandsPath)
         .filter(file => file.endsWith(".js"));
 
+    let loaded = 0;
     for (const file of commandFiles) {
         const filePath = path.join(commandsPath, file);
-        const command = require(filePath);
+        try {
+            const command = require(filePath);
 
-        if ("data" in command && "execute" in command) {
-            client.commands.set(command.data.name, command);
+            if ("data" in command && "execute" in command) {
+                client.commands.set(command.data.name, command);
+                loaded++;
+            } else {
+                console.warn(
+                    `⚠️ Command ${file} is missing required "data" or "execute" export`
+                );
+            }
+        } catch (error) {
+            console.error(
+                `❌ Failed to load command ${file}:`,
+                error.message
+            );
         }
     }
 
-    console.log(`✅ Loaded ${client.commands.size} command(s)`);
+    console.log(`✅ Loaded ${loaded} command(s)`);
 }
 
 module.exports = { loadCommands };

@@ -12,16 +12,23 @@ if (!process.env.GROQ_API_KEY) {
     console.warn("⚠️ GROQ_API_KEY is missing from environment variables");
 }
 
-const groq = new Groq({
-    apiKey: process.env.GROQ_API_KEY
-});
-
 const MODEL = "openai/gpt-oss-20b";
 
-/**
- * Friendly, consistent message when the server AI quota is exhausted.
- * Safe for Discord users — no internals.
- */
+/** Lazy Groq client so the bot can start without GROQ_API_KEY (non-AI features still work). */
+let groqClient = null;
+
+function getGroqClient() {
+    if (!process.env.GROQ_API_KEY) {
+        return null;
+    }
+    if (!groqClient) {
+        groqClient = new Groq({
+            apiKey: process.env.GROQ_API_KEY
+        });
+    }
+    return groqClient;
+}
+
 function limitReachedMessage(guildId) {
     const resetText = getResetDescription();
     const usage = guildId ? getUsage(guildId) : null;
@@ -42,10 +49,6 @@ function isLimitError(error) {
     return Boolean(error && error.code === "AI_DAILY_LIMIT");
 }
 
-/**
- * Map any AI-related error to a short, user-safe Discord message.
- * Never exposes API keys, stack traces, or provider details.
- */
 function formatAiUserError(error) {
     if (isLimitError(error)) {
         return limitReachedMessage(error.guildId);
@@ -72,10 +75,6 @@ function formatAiUserError(error) {
     );
 }
 
-/**
- * Reply helper for slash commands after deferReply.
- * Logs the real error server-side; only sends a friendly message to Discord.
- */
 async function replyAiError(interaction, error, guildId) {
     if (isLimitError(error)) {
         if (guildId && !error.guildId) {
@@ -97,11 +96,6 @@ async function replyAiError(interaction, error, guildId) {
     return interaction.reply({ content: msg, ephemeral: true });
 }
 
-/**
- * Central AI entry point. Every feature that calls Groq must go through this.
- * Counts toward the server's shared 20 requests/day when guildId is provided.
- * Limit is checked BEFORE any API call.
- */
 async function askAI(messages, options = {}) {
     const guildId = options.guildId;
 
@@ -112,7 +106,8 @@ async function askAI(messages, options = {}) {
         throw error;
     }
 
-    if (!process.env.GROQ_API_KEY) {
+    const client = getGroqClient();
+    if (!client) {
         const error = new Error("GROQ_API_KEY is not configured");
         error.code = "AI_NOT_CONFIGURED";
         throw error;
@@ -120,14 +115,13 @@ async function askAI(messages, options = {}) {
 
     let completion;
     try {
-        completion = await groq.chat.completions.create({
+        completion = await client.chat.completions.create({
             model: options.model || MODEL,
             messages,
             temperature: options.temperature ?? 0.8,
             max_completion_tokens: options.maxTokens || 1000
         });
     } catch (apiError) {
-        // Do not increment usage on API failure
         console.error(
             "Groq API error:",
             apiError?.status || apiError?.message || apiError
@@ -153,10 +147,6 @@ async function askAI(messages, options = {}) {
     return content;
 }
 
-/**
- * Personality-aware helper for chat-style features.
- * options.guildId is required for limit tracking.
- */
 async function askOmni(userMessage, context = [], options = {}) {
     const messages = [
         {
