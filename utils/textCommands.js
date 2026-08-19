@@ -25,6 +25,14 @@ const { canUseAI } = require("./ai/aiLimit.js");
 
 const INVOKE_NAMES = BOT_INVOKE_NAMES.map(n => n.toLowerCase());
 
+function escapeRegex(value) {
+    return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * Detect prefix commands, or any whole-word mention of omni / omnibot
+ * anywhere in the message (case-insensitive).
+ */
 function parseInvocation(content) {
     if (!content || typeof content !== "string") {
         return null;
@@ -35,6 +43,7 @@ function parseInvocation(content) {
         return null;
     }
 
+    // Prefix always wins when the message starts with it
     if (PREFIX && trimmed.startsWith(PREFIX)) {
         const rest = trimmed.slice(PREFIX.length).trim();
         if (!rest) {
@@ -43,19 +52,41 @@ function parseInvocation(content) {
         return { mode: "prefix", body: rest, raw: trimmed };
     }
 
-    const firstSpace = trimmed.search(/\s/);
-    const firstWord =
-        firstSpace === -1 ? trimmed : trimmed.slice(0, firstSpace);
-    const remainder =
-        firstSpace === -1 ? "" : trimmed.slice(firstSpace + 1).trim();
-
-    const nameToken = firstWord.replace(/[:，,]+$/g, "").toLowerCase();
-
-    if (INVOKE_NAMES.includes(nameToken)) {
-        return { mode: "name", body: remainder, raw: trimmed };
+    // Match names anywhere as whole words; longer names first (omnibot before omni)
+    const names = [...INVOKE_NAMES].sort((a, b) => b.length - a.length);
+    if (names.length === 0) {
+        return null;
     }
 
-    return null;
+    const pattern = new RegExp(
+        "\\b(" + names.map(escapeRegex).join("|") + ")\\b",
+        "i"
+    );
+    const match = pattern.exec(trimmed);
+    if (!match) {
+        return null;
+    }
+
+    const after = trimmed
+        .slice(match.index + match[0].length)
+        .replace(/^[:，,\s]+/, "")
+        .trim();
+    const before = trimmed.slice(0, match.index).trim();
+
+    // Prefer text after the name as the command/AI body.
+    // If nothing follows (e.g. "hey omni"), use text before the name if any.
+    let body = after;
+    if (!body && before) {
+        body = before;
+    }
+
+    return {
+        mode: "name",
+        body,
+        raw: trimmed,
+        matchedName: match[1],
+        midMessage: match.index > 0
+    };
 }
 
 function tokenize(body) {
