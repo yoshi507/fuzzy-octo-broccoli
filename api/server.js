@@ -68,14 +68,21 @@ function createApiApp(discordClient) {
 
   app.use(generalLimiter);
 
-  app.get('/health', (req, res) => {
+  function healthPayload(req) {
     const client = req.app.locals.discordClient;
-    res.json({
+    return {
       ok: true,
+      service: 'omnibot',
       botReady: Boolean(client?.readyAt),
       guilds: client?.guilds?.cache?.size ?? 0,
       timestamp: new Date().toISOString()
-    });
+    };
+  }
+  app.get('/', (req, res) => {
+    res.status(200).json(healthPayload(req));
+  });
+  app.get('/health', (req, res) => {
+    res.status(200).json(healthPayload(req));
   });
 
   app.use('/auth', authLimiter, authRoutes);
@@ -89,11 +96,6 @@ function createApiApp(discordClient) {
   return app;
 }
 
-/**
- * Start (or re-bind client on) the dashboard API.
- * Binds process.env.PORT immediately so hosts like Wispbyte keep the process alive.
- * Safe to call multiple times — only one listener is created.
- */
 function startApiServer(discordClient) {
   if (activeApp && discordClient) {
     activeApp.locals.discordClient = discordClient;
@@ -119,6 +121,9 @@ function startApiServer(discordClient) {
 
     activeServer.on('error', (err) => {
       console.error('❌ API server error:', err?.code || err?.message || err);
+      if (err && err.code === 'EADDRINUSE') {
+        console.error('[DIAG] PORT already in use — another process may be bound to this port.');
+      }
     });
 
     return activeServer;
