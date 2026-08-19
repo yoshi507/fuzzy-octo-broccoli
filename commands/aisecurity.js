@@ -16,8 +16,10 @@ const {
 const {
     askAI,
     limitReachedMessage,
-    isLimitError
+    isLimitError,
+    replyAiError
 } = require("../utils/ai/groq.js");
+const { canUseAI } = require("../utils/ai/aiLimit.js");
 
 module.exports = {
     data: new SlashCommandBuilder()
@@ -133,7 +135,7 @@ module.exports = {
 
             return interaction.reply(
                 `🛡️ **AI Security:** ${current.enabled ? "Enabled" : "Disabled"}\n` +
-                `🔎 **Mode:** ${current.mode || "monitor"}\n` +
+                `🔍 **Mode:** ${current.mode || "monitor"}\n` +
                 `💣 **Anti-nuke window:** ${Math.round(anti.windowMs / 1000)}s\n` +
                 `📉 **Thresholds:** delete ch/role ${anti.thresholds.channelDelete}/${anti.thresholds.roleDelete}, ` +
                 `create ch/role ${anti.thresholds.channelCreate}/${anti.thresholds.roleCreate}, ` +
@@ -195,6 +197,10 @@ module.exports = {
             await interaction.deferReply({ ephemeral: true });
 
             try {
+                if (!canUseAI(interaction.guild.id)) {
+                    return interaction.editReply(limitReachedMessage(interaction.guild.id));
+                }
+
                 const analysis = await askAI(
                     [
                         {
@@ -251,13 +257,7 @@ module.exports = {
                     `📝 Reason: ${reason}`
                 );
             } catch (error) {
-                if (isLimitError(error)) {
-                    return interaction.editReply(limitReachedMessage());
-                }
-                console.error("AI security test error:", error);
-                await interaction.editReply(
-                    "❌ The AI security test failed. Check the console."
-                );
+                return replyAiError(interaction, error, interaction.guild?.id);
             }
         }
     }
