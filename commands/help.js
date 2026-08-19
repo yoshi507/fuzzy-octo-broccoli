@@ -67,6 +67,14 @@ module.exports = {
                     name: "🔧 Utility",
                     value: "`/ping` `/help` `/translate` `/autotranslate`",
                     inline: false
+                },
+                {
+                    name: "💬 Text & natural commands",
+                    value:
+                        "You can also use `!command` or `omni command` (same as slash).\n" +
+                        "Examples: `!ping` · `omni help` · `OmniBot what is leveling?`\n" +
+                        "AI questions via `omni ...` share the daily AI limit.",
+                    inline: false
                 }
             )
             .setFooter({
