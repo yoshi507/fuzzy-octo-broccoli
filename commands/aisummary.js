@@ -3,9 +3,11 @@ const {
     askAI,
     limitReachedMessage,
     isLimitError,
-    getRemaining,
-    DAILY_LIMIT
+    replyAiError,
+    DAILY_LIMIT,
+    getRemaining
 } = require("../utils/ai/groq.js");
+const { canUseAI } = require("../utils/ai/aiLimit.js");
 
 module.exports = {
     data: new SlashCommandBuilder()
@@ -23,6 +25,10 @@ module.exports = {
     async execute(interaction) {
         const limit = interaction.options.getInteger("messages") || 40;
         await interaction.deferReply();
+
+        if (!canUseAI(interaction.guild.id)) {
+            return interaction.editReply(limitReachedMessage(interaction.guild.id));
+        }
 
         try {
             const messages = await interaction.channel.messages.fetch({
@@ -42,7 +48,7 @@ module.exports = {
 
             if (usable.length < 3) {
                 return interaction.editReply(
-                    "📭 There aren't enough recent messages to summarise."
+                    "🗭 There aren't enough recent messages to summarise."
                 );
             }
 
@@ -93,11 +99,7 @@ module.exports = {
                 `🧠 **Channel summary**\n\n${body}\n\n_AI requests left today: **${remaining}/${DAILY_LIMIT}**_`
             );
         } catch (error) {
-            if (isLimitError(error)) {
-                return interaction.editReply(limitReachedMessage());
-            }
-            console.error("AI Summary error:", error);
-            await interaction.editReply("❌ I couldn't summarise this channel.");
+            return replyAiError(interaction, error, interaction.guild?.id);
         }
     }
 };
