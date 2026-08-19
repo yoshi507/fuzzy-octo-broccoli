@@ -1,6 +1,6 @@
 const {
-    askAI
-} = require("../utils/ai/groq.js");
+    translateText
+} = require("../utils/translator.js");
 
 const {
     getChannelSettings
@@ -30,7 +30,7 @@ module.exports = {
         }
 
         // =========================
-        // AUTO TRANSLATION
+        // AUTO TRANSLATION (non-AI)
         // =========================
 
         const translationSettings =
@@ -41,25 +41,11 @@ module.exports = {
             message.content?.trim()
         ) {
             try {
-                const translation = await askAI(
-                    [
-                        {
-                            role: "system",
-                            content:
-                                "You are a translation system. Translate the user's message into the requested language. Output ONLY the translation."
-                        },
-                        {
-                            role: "user",
-                            content:
-                                `Translate this into ${translationSettings.language}:\n\n${message.content}`
-                        }
-                    ],
-                    {
-                        temperature: 0.2,
-                        maxTokens: 500,
-                        guildId: message.guild.id
-                    }
+                const translationResult = await translateText(
+                    message.content,
+                    translationSettings.language
                 );
+                const translation = translationResult?.text;
 
                 if (translation) {
                     await message.reply(
@@ -67,9 +53,7 @@ module.exports = {
                     );
                 }
             } catch (error) {
-                if (error.code !== "AI_DAILY_LIMIT") {
-                    console.error("Auto translation error:", error);
-                }
+                console.error("Auto translation error:", error.message || error);
             }
         }
 
@@ -156,7 +140,6 @@ module.exports = {
 
         const userSpam = guildSpam[userId];
 
-        // Keep only messages from the last 8 seconds
         userSpam.messages = userSpam.messages.filter(
             timestamp => now - timestamp < 8000
         );
@@ -171,7 +154,6 @@ module.exports = {
 
         saveDatabase(database);
 
-        // 6 messages in 8 seconds OR repeated message
         if (userSpam.messages.length >= 6 || repeated) {
             try {
                 await message.delete();
