@@ -38,9 +38,12 @@ module.exports = {
             database.ticketSettings = {};
         }
 
+        const previous = database.ticketSettings[interaction.guild.id] || {};
         database.ticketSettings[interaction.guild.id] = {
+            ...previous,
             enabled: true,
-            panelChannelId: channel.id
+            panelChannelId: channel.id,
+            staffRoleIds: previous.staffRoleIds || []
         };
 
         saveDatabase(database);
@@ -74,4 +77,3 @@ module.exports = {
         });
     }
 };
-
