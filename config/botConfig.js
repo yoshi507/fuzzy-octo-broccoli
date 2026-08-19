@@ -15,5 +15,13 @@ module.exports = {
     /**
      * If the text after the name is not a known command, treat it as an AI request.
      */
-    ALLOW_NATURAL_AI: true
+    ALLOW_NATURAL_AI: true,
+
+    /**
+     * Official OmniBot Dashboard URL (GitHub Pages).
+     * Path is case-sensitive: capital O in OmniBot.
+     * Override with DASHBOARD_URL env if needed.
+     */
+    DASHBOARD_URL:
+        process.env.DASHBOARD_URL || "https://yoshi507.github.io/OmniBot/"
 };

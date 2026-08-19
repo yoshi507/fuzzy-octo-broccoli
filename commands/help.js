@@ -79,14 +79,14 @@ module.exports = {
                 },
                 {
                     name: "🔧 Utility",
-                    value: "`/ping` `/help` `/translate` `/autotranslate`",
+                    value: "`/ping` `/help` `/dashboard` `/translate` `/autotranslate`",
                     inline: false
                 },
                 {
                     name: "💬 Text & natural commands",
                     value:
                         "Use `!command`, or mention **omni** / **omnibot** anywhere in a message.\n" +
-                        "Examples: `!ping` · `hey omni help` · `what is leveling OmniBot?`\n" +
+                        "Examples: `!ping` · `hey omni help` · `omni dashboard`\n" +
                         "AI questions that mention omni share the daily AI limit.",
                     inline: false
                 }
