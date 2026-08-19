@@ -6,9 +6,11 @@ const {
     askAI,
     limitReachedMessage,
     isLimitError,
-    getRemaining,
-    DAILY_LIMIT
+    replyAiError,
+    DAILY_LIMIT,
+    getRemaining
 } = require("../utils/ai/groq.js");
+const { canUseAI } = require("../utils/ai/aiLimit.js");
 const { getGuildSecurity } = require("../utils/ai/security.js");
 
 module.exports = {
@@ -29,13 +31,17 @@ module.exports = {
         const count = interaction.options.getInteger("count") || 10;
         await interaction.deferReply({ ephemeral: true });
 
+        if (!canUseAI(interaction.guild.id)) {
+            return interaction.editReply(limitReachedMessage(interaction.guild.id));
+        }
+
         try {
             const security = getGuildSecurity(interaction.guild.id);
             const incidents = (security.incidents || []).slice(-count);
 
             if (incidents.length === 0) {
                 return interaction.editReply(
-                    "📭 No security incidents are recorded for this server yet."
+                    "🗭 No security incidents are recorded for this server yet."
                 );
             }
 
@@ -94,11 +100,7 @@ module.exports = {
                     `_AI requests left today: **${remaining}/${DAILY_LIMIT}**_`
             );
         } catch (error) {
-            if (isLimitError(error)) {
-                return interaction.editReply(limitReachedMessage());
-            }
-            console.error("aiincident error:", error);
-            await interaction.editReply("❌ Could not analyse incidents.");
+            return replyAiError(interaction, error, interaction.guild?.id);
         }
     }
 };
