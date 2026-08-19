@@ -29,7 +29,8 @@ const {
     getTopics
 } = require("./utils/ai/deadChat.js");
 
-const { askAI } = require("./utils/ai/groq.js");
+const { askAI, isLimitError } = require("./utils/ai/groq.js");
+const { canUseAI } = require("./utils/ai/aiLimit.js");
 
 const client = new Client({
     intents: [
@@ -50,38 +51,42 @@ const path = require("path");
 
 const eventsPath = path.join(__dirname, "events");
 if (fs.existsSync(eventsPath)) {
+    const eventNameMap = {
+        messageCreate: Events.MessageCreate,
+        guildMemberAdd: Events.GuildMemberAdd,
+        guildMemberRemove: Events.GuildMemberRemove,
+        messageDelete: Events.MessageDelete,
+        interactionCreate: Events.InteractionCreate,
+        clientReady: Events.ClientReady,
+        ready: Events.ClientReady
+    };
+
     const eventFiles = fs
         .readdirSync(eventsPath)
         .filter(file => file.endsWith(".js"));
 
+    let loadedEvents = 0;
     for (const file of eventFiles) {
-        const event = require(path.join(eventsPath, file));
-        if (!event?.name || typeof event.execute !== "function") {
-            continue;
-        }
+        try {
+            const event = require(path.join(eventsPath, file));
+            if (!event?.name || typeof event.execute !== "function") {
+                console.warn(`⚠️ Skipping invalid event file: ${file}`);
+                continue;
+            }
 
-        if (event.name === "messageCreate") {
-            client.on(Events.MessageCreate, (...args) =>
-                event.execute(...args)
-            );
-        } else if (event.name === "guildMemberAdd") {
-            client.on(Events.GuildMemberAdd, (...args) =>
-                event.execute(...args)
-            );
-        } else if (event.name === "guildMemberRemove") {
-            client.on(Events.GuildMemberRemove, (...args) =>
-                event.execute(...args)
-            );
-        } else if (event.name === "messageDelete") {
-            client.on(Events.MessageDelete, (...args) =>
-                event.execute(...args)
-            );
-        } else {
-            client.on(event.name, (...args) => event.execute(...args));
+            const eventKey = eventNameMap[event.name] || event.name;
+            if (event.once) {
+                client.once(eventKey, (...args) => event.execute(...args));
+            } else {
+                client.on(eventKey, (...args) => event.execute(...args));
+            }
+            loadedEvents++;
+        } catch (error) {
+            console.error(`❌ Failed to load event ${file}:`, error.message);
         }
     }
 
-    console.log(`✅ Loaded ${eventFiles.length} event file(s)`);
+    console.log(`✅ Loaded ${loadedEvents} event file(s)`);
 }
 
 client.on(Events.InteractionCreate, async (interaction) => {
@@ -163,6 +168,138 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
             return;
         }
+
+        if (interaction.customId === "create_ticket") {
+            const { loadDatabase } = require("./database/database.js");
+            const database = loadDatabase();
+            const settings = database.ticketSettings?.[interaction.guild.id];
+
+            if (!settings?.enabled) {
+                return interaction.reply({
+                    content: "❌ Tickets are not set up on this server.",
+                    ephemeral: true
+                });
+            }
+
+            const existing = interaction.guild.channels.cache.find(
+                ch =>
+                    ch.topic && ch.topic.includes(`ticket-user:${interaction.user.id}`)
+            );
+
+            if (existing) {
+                return interaction.reply({
+                    content: `❌ You already have an open ticket: ${existing}`,
+                    ephemeral: true
+                });
+            }
+
+            await interaction.deferReply({ ephemeral: true });
+
+            try {
+                const staffRoleIds = settings.staffRoleIds || [];
+                const overwrites = [
+                    {
+                        id: interaction.guild.id,
+                        deny: [PermissionFlagsBits.ViewChannel]
+                    },
+                    {
+                        id: interaction.user.id,
+                        allow: [
+                            PermissionFlagsBits.ViewChannel,
+                            PermissionFlagsBits.SendMessages,
+                            PermissionFlagsBits.ReadMessageHistory,
+                            PermissionFlagsBits.AttachFiles
+                        ]
+                    },
+                    {
+                        id: interaction.client.user.id,
+                        allow: [
+                            PermissionFlagsBits.ViewChannel,
+                            PermissionFlagsBits.SendMessages,
+                            PermissionFlagsBits.ManageChannels
+                        ]
+                    }
+                ];
+
+                for (const roleId of staffRoleIds) {
+                    overwrites.push({
+                        id: roleId,
+                        allow: [
+                            PermissionFlagsBits.ViewChannel,
+                            PermissionFlagsBits.SendMessages,
+                            PermissionFlagsBits.ReadMessageHistory
+                        ]
+                    });
+                }
+
+                const safeName = interaction.user.username
+                    .toLowerCase()
+                    .replace(/[^a-z0-9]/g, "-")
+                    .replace(/-+/g, "-")
+                    .slice(0, 20) || "user";
+
+                const channel = await interaction.guild.channels.create({
+                    name: `ticket-${safeName}`,
+                    type: 0,
+                    topic: `ticket-user:${interaction.user.id}`,
+                    permissionOverwrites: overwrites
+                });
+
+                const closeRow = new ActionRowBuilder().addComponents(
+                    new ButtonBuilder()
+                        .setCustomId("close_ticket")
+                        .setLabel("Close Ticket")
+                        .setEmoji("🔒")
+                        .setStyle(ButtonStyle.Danger)
+                );
+
+                await channel.send({
+                    content:
+                        `${interaction.user} Welcome to your ticket.` +
+                        (staffRoleIds.length
+                            ? ` Staff: ${staffRoleIds.map(id => `<@&${id}>`).join(" ")}`
+                            : ""),
+                    embeds: [
+                        new EmbedBuilder()
+                            .setTitle("🎫 Support Ticket")
+                            .setDescription(
+                                "Describe your issue and staff will help you shortly.\n" +
+                                "Click **Close Ticket** when you're done."
+                            )
+                            .setColor(0x5865f2)
+                    ],
+                    components: [closeRow]
+                });
+
+                return interaction.editReply({
+                    content: `✅ Ticket created: ${channel}`
+                });
+            } catch (error) {
+                console.error("Ticket create error:", error?.message || error);
+                return interaction.editReply({
+                    content:
+                        "❌ I couldn't create a ticket. Check my permissions (Manage Channels)."
+                });
+            }
+        }
+
+        if (interaction.customId === "close_ticket") {
+            const channel = interaction.channel;
+            if (!channel || !channel.name?.startsWith("ticket-")) {
+                return interaction.reply({
+                    content: "❌ This button only works inside ticket channels.",
+                    ephemeral: true
+                });
+            }
+
+            await interaction.reply("🔒 Closing this ticket in 3 seconds...");
+            setTimeout(() => {
+                channel.delete("Ticket closed").catch(err => {
+                    console.error("Ticket close error:", err?.message || err);
+                });
+            }, 3000);
+            return;
+        }
     }
 
     if (!interaction.isChatInputCommand()) return;
@@ -173,10 +310,15 @@ client.on(Events.InteractionCreate, async (interaction) => {
     try {
         await command.execute(interaction);
     } catch (error) {
-        console.error(error);
+        console.error(
+            "Command error:",
+            interaction.commandName,
+            error?.code || error?.message || error
+        );
 
         const payload = {
-            content: "❌ Something went wrong.",
+            content:
+                "❌ Something went wrong running that command. Please try again in a moment.",
             ephemeral: true
         };
 
@@ -187,7 +329,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
                 await interaction.reply(payload);
             }
         } catch (replyError) {
-            console.error("Failed to send error reply:", replyError);
+            console.error("Failed to send error reply:", replyError?.message || replyError);
         }
     }
 });
@@ -337,6 +479,10 @@ client.on(Events.GuildMemberAdd, async (member) => {
 
         const severity = joinCount >= 15 ? "high" : "medium";
 
+        if (!canUseAI(member.guild.id)) {
+            return;
+        }
+
         const analysis = await askAI(
             [
                 {
@@ -365,8 +511,6 @@ client.on(Events.GuildMemberAdd, async (member) => {
                 maxTokens: 250
             }
         );
-
-        console.log("[AI Security] Groq analysis:", analysis);
 
         let result = {
             raidLikely: false,
@@ -469,19 +613,16 @@ client.on(Events.GuildMemberAdd, async (member) => {
             }
         }
     } catch (error) {
-        console.error("AI raid detection error:", error);
+        if (!isLimitError(error)) {
+            console.error(
+                "AI raid detection error:",
+                error?.code || error?.message || error
+            );
+        }
     }
 });
 
-// =========================
-// ANTI-NUKE (module)
-// =========================
-
 const { registerAntiNukeListeners } = require("./utils/antiNuke.js");
 registerAntiNukeListeners(client);
-
-// =========================
-// LOGIN
-// =========================
 
 client.login(process.env.DISCORD_TOKEN);
