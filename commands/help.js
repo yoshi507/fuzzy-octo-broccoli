@@ -57,10 +57,24 @@ module.exports = {
                     inline: false
                 },
                 {
+                    name: "📝 Appeals",
+                    value:
+                        "`/appeal submit|status|view|accept|reject|moreinfo|list`\n" +
+                        "`/appealsetup` — default form works out of the box",
+                    inline: false
+                },
+                {
+                    name: "🎯 Quizzes",
+                    value:
+                        "`/quiz start|stop|leaderboard|stats|categories`\n" +
+                        "`/quizsetup` — built-in questions, multiplayer scoring",
+                    inline: false
+                },
+                {
                     name: "🎮 Games & Economy",
                     value:
                         "`/balance` `/daily` `/work` `/pay` `/shop` `/buy` `/inventory` `/rich`\n" +
-                        "`/coinflip` `/dice` `/rps` `/slots` `/trivia` `/guessnumber` `/higherlower`",
+                        "`/coinflip` `/dice` `/rps` `/slots` `/trivia` `/quiz` `/guessnumber` `/higherlower`",
                     inline: false
                 },
                 {
