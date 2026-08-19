@@ -4,7 +4,9 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "node index.js",
+    "test:api": "node api/tests/smoke.js"
   },
   "keywords": [],
   "author": "",
@@ -12,8 +14,11 @@
   "type": "commonjs",
   "dependencies": {
     "@discordjs/voice": "^0.19.2",
+    "cors": "^2.8.5",
     "discord.js": "^14.27.0",
     "dotenv": "^17.4.2",
+    "express": "^4.21.2",
+    "express-rate-limit": "^7.5.0",
     "groq-sdk": "^1.5.0",
     "lowdb": "^7.0.1",
     "opusscript": "^0.0.8",
