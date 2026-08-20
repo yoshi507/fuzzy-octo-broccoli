@@ -73,11 +73,6 @@ function getAppealsDirectory(client, { force } = {}) {
   };
 }
 
-/**
- * Public directory of servers that accept appeals through OmniBot.
- * Requires login so only real Discord users can browse / submit.
- * Membership is NOT required (banned users still need to appeal).
- */
 router.get('/directory', requireAuth, async (req, res, next) => {
   try {
     const client = getClient(req);
@@ -124,6 +119,11 @@ router.get('/guilds/:guildId/form', requireAuth, async (req, res, next) => {
       guildName: guild?.name || 'Server',
       guildIcon: guildIconHash(guild),
       category: settings.category || 'ban',
+      types: [
+        { id: 'ban', label: 'Ban' },
+        { id: 'timeout', label: 'Timeout / Mute' },
+        { id: 'warn', label: 'Warning' }
+      ],
       questions: (settings.questions || []).map((q) => ({
         id: q.id,
         label: q.label,
@@ -200,10 +200,16 @@ router.post('/guilds/:guildId/submit', requireAuth, async (req, res, next) => {
       }
     }
 
+    const allowedTypes = new Set(['ban', 'timeout', 'warn', 'mute', 'warning']);
+    let appealType = String(req.body?.type || settings.category || 'ban').toLowerCase();
+    if (appealType === 'mute') appealType = 'timeout';
+    if (appealType === 'warning') appealType = 'warn';
+    if (!allowedTypes.has(appealType)) appealType = 'ban';
+
     const appeal = createAppeal(guildId, {
       userId,
       username: req.user.global_name || req.user.username,
-      type: req.body?.type || settings.category || 'ban',
+      type: appealType,
       answers
     });
 
@@ -212,42 +218,45 @@ router.post('/guilds/:guildId/submit', requireAuth, async (req, res, next) => {
         const guild = client.guilds.cache.get(guildId);
         const ch = guild?.channels?.cache?.get(settings.channelId);
         if (ch && typeof ch.send === 'function') {
+          const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
+          const { updateAppeal } = require('../../utils/appeals/store.js');
+          const typeLabel =
+            appealType === 'timeout' ? 'Timeout / Mute' :
+            appealType === 'warn' ? 'Warning' : 'Ban';
           const lines = (settings.questions || []).map((q) => {
             const ans = answers[q.id] || '—';
             return `**${q.label}**\n${ans}`;
           });
-          const body =
-            `📨 **New appeal** \`${appeal.id}\`\n` +
-            `From: <@${userId}> (\`${userId}\`) · **${appeal.username}**\n` +
-            `Type: **${appeal.type}** · Status: **pending**\n\n` +
-            lines.join('\n\n');
-
-          const chunks = [];
-          if (body.length <= 1900) {
-            chunks.push(body);
-          } else {
-            chunks.push(
-              `📨 **New appeal** \`${appeal.id}\` from <@${userId}> (${appeal.username})\nType: **${appeal.type}** · Status: **pending**`
-            );
-            for (const q of settings.questions || []) {
-              const ans = answers[q.id] || '—';
-              chunks.push(`**${q.label}**\n${String(ans).slice(0, 900)}`);
-            }
-          }
-
-          let firstMsg = null;
-          for (const chunk of chunks) {
-            const msg = await ch.send({ content: chunk.slice(0, 2000) });
-            if (!firstMsg) firstMsg = msg;
-          }
-
-          if (firstMsg) {
-            const { updateAppeal } = require('../../utils/appeals/store.js');
-            updateAppeal(guildId, appeal.id, {
-              messageId: firstMsg.id,
-              channelId: ch.id
-            });
-          }
+          const embed = new EmbedBuilder()
+            .setTitle(`Appeal ${appeal.id}`)
+            .setColor(settings.embedColor || 0x5865f2)
+            .setDescription(lines.join('\n\n') || '*No answers*')
+            .addFields(
+              { name: 'User', value: `<@${userId}> (\`${userId}\`)`, inline: true },
+              { name: 'Type', value: typeLabel, inline: true },
+              { name: 'Status', value: 'pending', inline: true }
+            )
+            .setFooter({ text: 'Accept / Reject buttons · or /appeal accept|reject' });
+          const row = new ActionRowBuilder().addComponents(
+            new ButtonBuilder()
+              .setCustomId(`appeal_accept:${appeal.id}`)
+              .setLabel('Accept')
+              .setStyle(ButtonStyle.Success),
+            new ButtonBuilder()
+              .setCustomId(`appeal_reject:${appeal.id}`)
+              .setLabel('Reject')
+              .setStyle(ButtonStyle.Danger)
+          );
+          const mention = (settings.staffRoleIds || []).map((id) => `<@&${id}>`).join(' ');
+          const msg = await ch.send({
+            content: mention || undefined,
+            embeds: [embed],
+            components: [row]
+          });
+          updateAppeal(guildId, appeal.id, {
+            messageId: msg.id,
+            channelId: ch.id
+          });
         }
       }
     } catch (notifyErr) {
