@@ -4,6 +4,7 @@ const path = require("path");
 const dataDirectory = path.join(__dirname, "../../data");
 const limitFile = path.join(dataDirectory, "ai-limits.json");
 
+/** Fixed daily AI request allowance per server. Not configurable. */
 const DAILY_LIMIT = 20;
 
 function ensureStorage() {
@@ -75,16 +76,6 @@ function normalizeGuildEntry(limits, guildId) {
 }
 
 function getGuildDailyLimit(guildId) {
-    if (!guildId) return DAILY_LIMIT;
-    try {
-        const { loadDatabase } = require("../../database/database.js");
-        const db = loadDatabase();
-        const override = db.dashboard?.[guildId]?.ai?.dailyLimit;
-        const n = Number(override);
-        if (Number.isFinite(n) && n >= 1 && n <= 500) return Math.floor(n);
-    } catch {
-        /* keep default */
-    }
     return DAILY_LIMIT;
 }
 
