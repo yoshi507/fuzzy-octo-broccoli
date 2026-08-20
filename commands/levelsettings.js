@@ -3,10 +3,7 @@ const {
     PermissionFlagsBits
 } = require("discord.js");
 
-const {
-    loadDatabase,
-    saveDatabase
-} = require("../database/database.js");
+const { mergeGuildConfig } = require("../utils/configSync.js");
 
 module.exports = {
     data: new SlashCommandBuilder()
@@ -23,21 +20,8 @@ module.exports = {
         ),
 
     async execute(interaction) {
-        const enabled =
-            interaction.options.getBoolean("enabled");
-
-        const database = loadDatabase();
-
-        if (!database.levelSettings) {
-            database.levelSettings = {};
-        }
-
-        database.levelSettings[interaction.guild.id] = {
-            enabled: enabled
-        };
-
-        saveDatabase(database);
-
+        const enabled = interaction.options.getBoolean("enabled");
+        mergeGuildConfig("levelSettings", interaction.guild.id, { enabled });
         await interaction.reply(
             enabled
                 ? "✅ Leveling has been **enabled**."

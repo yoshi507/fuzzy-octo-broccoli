@@ -4,10 +4,7 @@ const {
     ChannelType
 } = require("discord.js");
 
-const {
-    loadDatabase,
-    saveDatabase
-} = require("../database/database.js");
+const { mergeGuildConfig } = require("../utils/configSync.js");
 
 module.exports = {
     data: new SlashCommandBuilder()
@@ -25,26 +22,13 @@ module.exports = {
         ),
 
     async execute(interaction) {
-
-        const channel =
-            interaction.options.getChannel("channel");
-
-        const database = loadDatabase();
-
-        if (!database.logging) {
-            database.logging = {};
-        }
-
-        database.logging[interaction.guild.id] = {
+        const channel = interaction.options.getChannel("channel");
+        mergeGuildConfig("logging", interaction.guild.id, {
             enabled: true,
             channelId: channel.id
-        };
-
-        saveDatabase(database);
-
+        });
         await interaction.reply({
-            content:
-                `✅ Server logging is now enabled in ${channel}.`,
+            content: `✅ Server logging is now enabled in ${channel}.`,
             ephemeral: true
         });
     }
