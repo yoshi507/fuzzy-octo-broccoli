@@ -3,6 +3,8 @@ const {
     PermissionFlagsBits,
     EmbedBuilder,
     ActionRowBuilder,
+    ButtonBuilder,
+    ButtonStyle,
     ModalBuilder,
     TextInputBuilder,
     TextInputStyle
@@ -16,11 +18,19 @@ const {
     lastClosedAt,
     listAppeals
 } = require("../utils/appeals/store.js");
+const { applyAcceptedAction } = require("../utils/appeals/actions.js");
+
+const APPEAL_TYPES = [
+    { name: "Ban", value: "ban" },
+    { name: "Timeout / Mute", value: "timeout" },
+    { name: "Warning", value: "warn" }
+];
 
 function isStaff(member, settings) {
     if (!member) return false;
     if (member.permissions.has(PermissionFlagsBits.ManageGuild)) return true;
     if (member.permissions.has(PermissionFlagsBits.BanMembers)) return true;
+    if (member.permissions.has(PermissionFlagsBits.ModerateMembers)) return true;
     return (settings.staffRoleIds || []).some((id) => member.roles.cache.has(id));
 }
 
@@ -33,44 +43,157 @@ function formatAnswers(appeal, settings) {
     return lines.join("\n\n") || "*No answers*";
 }
 
+function typeLabel(type) {
+    const t = String(type || "ban").toLowerCase();
+    if (t === "timeout" || t === "mute") return "Timeout / Mute";
+    if (t === "warn" || t === "warning") return "Warning";
+    return "Ban";
+}
+
+function reviewButtons(appealId) {
+    return new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+            .setCustomId(`appeal_accept:${appealId}`)
+            .setLabel("Accept")
+            .setStyle(ButtonStyle.Success),
+        new ButtonBuilder()
+            .setCustomId(`appeal_reject:${appealId}`)
+            .setLabel("Reject")
+            .setStyle(ButtonStyle.Danger)
+    );
+}
+
+function buildAppealEmbed(appeal, settings, statusNote) {
+    const embed = new EmbedBuilder()
+        .setTitle(`Appeal ${appeal.id}`)
+        .setColor(settings.embedColor || 0x5865f2)
+        .setDescription(formatAnswers(appeal, settings))
+        .addFields(
+            { name: "User", value: `<@${appeal.userId}> (\`${appeal.userId}\`)`, inline: true },
+            { name: "Type", value: typeLabel(appeal.type), inline: true },
+            { name: "Status", value: appeal.status || "pending", inline: true }
+        )
+        .setFooter({ text: "Accept / Reject buttons · or /appeal accept|reject" });
+    if (statusNote) {
+        embed.addFields({ name: "Result", value: statusNote.slice(0, 1024) });
+    }
+    return embed;
+}
+
+async function finalizeReview(guild, appeal, status, reviewer, note) {
+    const settings = getSettings(guild.id);
+    updateAppeal(guild.id, appeal.id, {
+        status,
+        staffNote: note || null,
+        reviewedBy: reviewer.id
+    });
+
+    let actionSummary = "";
+    if (status === "accepted") {
+        actionSummary = await applyAcceptedAction(guild, appeal, reviewer);
+    }
+
+    const msg = status === "accepted" ? settings.acceptMessage : settings.rejectMessage;
+    try {
+        const user = await guild.client.users.fetch(appeal.userId);
+        await user.send(
+            `**${guild.name}** — Appeal **${appeal.id}**\n${msg}` +
+                (note ? `\n\nNote: ${note}` : "") +
+                (actionSummary ? `\n\n${actionSummary}` : "")
+        );
+    } catch {
+        /* DMs closed */
+    }
+
+    try {
+        if (appeal.channelId && appeal.messageId) {
+            const ch = await guild.channels.fetch(appeal.channelId).catch(() => null);
+            const msgObj = ch ? await ch.messages.fetch(appeal.messageId).catch(() => null) : null;
+            if (msgObj) {
+                const refreshed = getAppeal(guild.id, appeal.id);
+                const embed = buildAppealEmbed(
+                    refreshed || appeal,
+                    settings,
+                    `${status.toUpperCase()} by ${reviewer.tag || reviewer.username}` +
+                        (actionSummary ? `\n${actionSummary}` : "")
+                );
+                await msgObj.edit({ embeds: [embed], components: [] });
+            }
+        }
+    } catch (err) {
+        console.error("[appeals] update staff message failed:", err?.message || err);
+    }
+
+    return actionSummary;
+}
+
 module.exports = {
     data: new SlashCommandBuilder()
         .setName("appeal")
-        .setDescription("Ban/mute appeals")
+        .setDescription("Ban / timeout / warning appeals")
         .addSubcommand((s) =>
-            s.setName("submit").setDescription("Submit a new appeal")
+            s
+                .setName("submit")
+                .setDescription("Submit a new appeal")
                 .addStringOption((o) =>
-                    o.setName("type").setDescription("Appeal type")
-                        .addChoices({ name: "Ban", value: "ban" }, { name: "Timeout / Mute", value: "timeout" })
+                    o
+                        .setName("type")
+                        .setDescription("What punishment are you appealing?")
+                        .addChoices(...APPEAL_TYPES)
+                        .setRequired(true)
                 )
         )
         .addSubcommand((s) =>
-            s.setName("status").setDescription("Check your appeal status")
+            s
+                .setName("status")
+                .setDescription("Check your appeal status")
                 .addStringOption((o) => o.setName("id").setDescription("Appeal ID"))
         )
         .addSubcommand((s) =>
-            s.setName("view").setDescription("Staff: view an appeal")
-                .addStringOption((o) => o.setName("id").setDescription("Appeal ID").setRequired(true))
-        )
-        .addSubcommand((s) =>
-            s.setName("accept").setDescription("Staff: accept an appeal")
-                .addStringOption((o) => o.setName("id").setDescription("Appeal ID").setRequired(true))
-                .addStringOption((o) => o.setName("note").setDescription("Optional note"))
-        )
-        .addSubcommand((s) =>
-            s.setName("reject").setDescription("Staff: reject an appeal")
-                .addStringOption((o) => o.setName("id").setDescription("Appeal ID").setRequired(true))
-                .addStringOption((o) => o.setName("note").setDescription("Optional note"))
-        )
-        .addSubcommand((s) =>
-            s.setName("moreinfo").setDescription("Staff: request more information")
-                .addStringOption((o) => o.setName("id").setDescription("Appeal ID").setRequired(true))
-                .addStringOption((o) => o.setName("message").setDescription("What you need").setRequired(true))
-        )
-        .addSubcommand((s) =>
-            s.setName("list").setDescription("Staff: list recent appeals")
+            s
+                .setName("view")
+                .setDescription("Staff: view an appeal")
                 .addStringOption((o) =>
-                    o.setName("status").setDescription("Filter")
+                    o.setName("id").setDescription("Appeal ID").setRequired(true)
+                )
+        )
+        .addSubcommand((s) =>
+            s
+                .setName("accept")
+                .setDescription("Staff: accept an appeal (applies unban / untimeout / unwarn)")
+                .addStringOption((o) =>
+                    o.setName("id").setDescription("Appeal ID").setRequired(true)
+                )
+                .addStringOption((o) => o.setName("note").setDescription("Optional note"))
+        )
+        .addSubcommand((s) =>
+            s
+                .setName("reject")
+                .setDescription("Staff: reject an appeal")
+                .addStringOption((o) =>
+                    o.setName("id").setDescription("Appeal ID").setRequired(true)
+                )
+                .addStringOption((o) => o.setName("note").setDescription("Optional note"))
+        )
+        .addSubcommand((s) =>
+            s
+                .setName("moreinfo")
+                .setDescription("Staff: request more information")
+                .addStringOption((o) =>
+                    o.setName("id").setDescription("Appeal ID").setRequired(true)
+                )
+                .addStringOption((o) =>
+                    o.setName("message").setDescription("What you need").setRequired(true)
+                )
+        )
+        .addSubcommand((s) =>
+            s
+                .setName("list")
+                .setDescription("Staff: list recent appeals")
+                .addStringOption((o) =>
+                    o
+                        .setName("status")
+                        .setDescription("Filter")
                         .addChoices(
                             { name: "Pending", value: "pending" },
                             { name: "Accepted", value: "accepted" },
@@ -82,17 +205,26 @@ module.exports = {
 
     async execute(interaction) {
         if (!interaction.guild) {
-            return interaction.reply({ content: "❌ Appeals must be used in a server.", ephemeral: true });
+            return interaction.reply({
+                content: "❌ Appeals must be used in a server.",
+                ephemeral: true
+            });
         }
         const settings = getSettings(interaction.guild.id);
         const sub = interaction.options.getSubcommand();
 
         if (sub === "submit") {
             if (!settings.enabled) {
-                return interaction.reply({ content: "❌ Appeals are not enabled on this server.", ephemeral: true });
+                return interaction.reply({
+                    content: "❌ Appeals are not enabled on this server.",
+                    ephemeral: true
+                });
             }
             if (findOpenByUser(interaction.guild.id, interaction.user.id)) {
-                return interaction.reply({ content: "❌ You already have an open appeal.", ephemeral: true });
+                return interaction.reply({
+                    content: "❌ You already have an open appeal.",
+                    ephemeral: true
+                });
             }
             const last = lastClosedAt(interaction.guild.id, interaction.user.id);
             const cooldownMs = (settings.cooldownHours || 72) * 3600 * 1000;
@@ -105,7 +237,9 @@ module.exports = {
             }
             const type = interaction.options.getString("type") || "ban";
             const questions = (settings.questions || []).slice(0, 5);
-            const modal = new ModalBuilder().setCustomId(`appeal_modal:${type}`).setTitle("Server appeal");
+            const modal = new ModalBuilder()
+                .setCustomId(`appeal_modal:${type}`)
+                .setTitle(`Appeal: ${typeLabel(type)}`.slice(0, 45));
             for (const q of questions) {
                 modal.addComponents(
                     new ActionRowBuilder().addComponents(
@@ -130,7 +264,9 @@ module.exports = {
                 return interaction.reply({ content: "❌ No appeal found for you.", ephemeral: true });
             }
             return interaction.reply({
-                content: `📋 Appeal **${appeal.id}** — status: **${appeal.status}**\nSubmitted <t:${Math.floor(appeal.createdAt / 1000)}:R>`,
+                content:
+                    `📋 Appeal **${appeal.id}** — status: **${appeal.status}** · type: **${typeLabel(appeal.type)}**\n` +
+                    `Submitted <t:${Math.floor(appeal.createdAt / 1000)}:R>`,
                 ephemeral: true
             });
         }
@@ -148,7 +284,10 @@ module.exports = {
             rows = rows.slice(0, 15);
             if (!rows.length) return interaction.reply({ content: "No appeals found.", ephemeral: true });
             const text = rows
-                .map((a) => `• **${a.id}** — <@${a.userId}> — \`${a.status}\` — <t:${Math.floor(a.createdAt / 1000)}:R>`)
+                .map(
+                    (a) =>
+                        `• **${a.id}** — <@${a.userId}> — \`${typeLabel(a.type)}\` — \`${a.status}\` — <t:${Math.floor(a.createdAt / 1000)}:R>`
+                )
                 .join("\n");
             return interaction.reply({ content: text, ephemeral: true });
         }
@@ -157,16 +296,7 @@ module.exports = {
             const id = interaction.options.getString("id").toUpperCase();
             const appeal = getAppeal(interaction.guild.id, id);
             if (!appeal) return interaction.reply({ content: "❌ Appeal not found.", ephemeral: true });
-            const embed = new EmbedBuilder()
-                .setTitle(`Appeal ${appeal.id}`)
-                .setColor(settings.embedColor || 0x5865f2)
-                .setDescription(formatAnswers(appeal, settings))
-                .addFields(
-                    { name: "User", value: `<@${appeal.userId}> (\`${appeal.userId}\`)`, inline: true },
-                    { name: "Type", value: appeal.type, inline: true },
-                    { name: "Status", value: appeal.status, inline: true }
-                )
-                .setTimestamp(appeal.createdAt);
+            const embed = buildAppealEmbed(appeal, settings);
             return interaction.reply({ embeds: [embed], ephemeral: true });
         }
 
@@ -176,20 +306,25 @@ module.exports = {
             const appeal = getAppeal(interaction.guild.id, id);
             if (!appeal) return interaction.reply({ content: "❌ Appeal not found.", ephemeral: true });
             if (appeal.status !== "pending" && appeal.status !== "more_info") {
-                return interaction.reply({ content: `❌ Appeal is already **${appeal.status}**.`, ephemeral: true });
+                return interaction.reply({
+                    content: `❌ Appeal is already **${appeal.status}**.`,
+                    ephemeral: true
+                });
             }
             const status = sub === "accept" ? "accepted" : "rejected";
-            updateAppeal(interaction.guild.id, id, {
+            const actionSummary = await finalizeReview(
+                interaction.guild,
+                appeal,
                 status,
-                staffNote: note || null,
-                reviewedBy: interaction.user.id
+                interaction.user,
+                note
+            );
+            return interaction.reply({
+                content:
+                    `✅ Appeal **${id}** marked **${status}**.` +
+                    (actionSummary ? `\n${actionSummary}` : ""),
+                ephemeral: true
             });
-            const msg = sub === "accept" ? settings.acceptMessage : settings.rejectMessage;
-            try {
-                const user = await interaction.client.users.fetch(appeal.userId);
-                await user.send(`**${interaction.guild.name}** — Appeal **${id}**\n${msg}${note ? `\n\nNote: ${note}` : ""}`);
-            } catch {}
-            return interaction.reply({ content: `✅ Appeal **${id}** marked **${status}**.`, ephemeral: true });
         }
 
         if (sub === "moreinfo") {
@@ -204,7 +339,9 @@ module.exports = {
             });
             try {
                 const user = await interaction.client.users.fetch(appeal.userId);
-                await user.send(`**${interaction.guild.name}** — Appeal **${id}**\n${settings.moreInfoMessage}\n\n${message}`);
+                await user.send(
+                    `**${interaction.guild.name}** — Appeal **${id}**\n${settings.moreInfoMessage}\n\n${message}`
+                );
             } catch {}
             return interaction.reply({ content: `✅ Requested more info for **${id}**.`, ephemeral: true });
         }
@@ -239,26 +376,69 @@ module.exports = {
             type,
             answers
         });
-        const embed = new EmbedBuilder()
-            .setTitle(`New appeal ${appeal.id}`)
-            .setColor(settings.embedColor || 0x5865f2)
-            .setDescription(formatAnswers(appeal, settings))
-            .addFields(
-                { name: "User", value: `<@${appeal.userId}> (\`${appeal.userId}\`)`, inline: true },
-                { name: "Type", value: type, inline: true }
-            )
-            .setFooter({ text: "Use /appeal accept|reject|moreinfo" });
+        const embed = buildAppealEmbed(appeal, settings);
         if (settings.channelId) {
             const ch = await interaction.guild.channels.fetch(settings.channelId).catch(() => null);
             if (ch?.isTextBased()) {
                 const mention = (settings.staffRoleIds || []).map((id) => `<@&${id}>`).join(" ");
-                const msg = await ch.send({ content: mention || undefined, embeds: [embed] });
-                updateAppeal(interaction.guild.id, appeal.id, { messageId: msg.id, channelId: ch.id });
+                const msg = await ch.send({
+                    content: mention || undefined,
+                    embeds: [embed],
+                    components: [reviewButtons(appeal.id)]
+                });
+                updateAppeal(interaction.guild.id, appeal.id, {
+                    messageId: msg.id,
+                    channelId: ch.id
+                });
             }
         }
         await interaction.reply({
-            content: `✅ ${settings.pendingMessage}\nReference: **${appeal.id}**`,
+            content: `✅ ${settings.pendingMessage}\nReference: **${appeal.id}** · Type: **${typeLabel(type)}**`,
             ephemeral: true
+        });
+        return true;
+    },
+
+    async handleButton(interaction) {
+        const id = interaction.customId || "";
+        if (!id.startsWith("appeal_accept:") && !id.startsWith("appeal_reject:")) {
+            return false;
+        }
+        if (!interaction.guild) {
+            await interaction.reply({ content: "❌ Guild required.", ephemeral: true });
+            return true;
+        }
+        const settings = getSettings(interaction.guild.id);
+        if (!isStaff(interaction.member, settings)) {
+            await interaction.reply({ content: "❌ Staff only.", ephemeral: true });
+            return true;
+        }
+        const appealId = id.split(":")[1];
+        const appeal = getAppeal(interaction.guild.id, appealId);
+        if (!appeal) {
+            await interaction.reply({ content: "❌ Appeal not found.", ephemeral: true });
+            return true;
+        }
+        if (appeal.status !== "pending" && appeal.status !== "more_info") {
+            await interaction.reply({
+                content: `❌ Appeal is already **${appeal.status}**.`,
+                ephemeral: true
+            });
+            return true;
+        }
+        const status = id.startsWith("appeal_accept:") ? "accepted" : "rejected";
+        await interaction.deferReply({ ephemeral: true });
+        const actionSummary = await finalizeReview(
+            interaction.guild,
+            appeal,
+            status,
+            interaction.user,
+            null
+        );
+        await interaction.editReply({
+            content:
+                `✅ Appeal **${appealId}** marked **${status}**.` +
+                (actionSummary ? `\n${actionSummary}` : "")
         });
         return true;
     }
