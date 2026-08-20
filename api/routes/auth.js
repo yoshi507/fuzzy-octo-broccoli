@@ -1,5 +1,5 @@
 const express = require('express');
-const { exchangeCode, fetchUser } = require('../services/discordOAuth');
+const { exchangeCode, fetchUser, fetchUserGuilds } = require('../services/discordOAuth');
 const { createSession, destroySession } = require('../services/sessions');
 const { requireAuth } = require('../middleware/auth');
 
@@ -10,10 +10,23 @@ router.post('/callback', async (req, res, next) => {
     const { code, redirectUri } = req.body || {};
     const tokenData = await exchangeCode(code, redirectUri);
     const user = await fetchUser(tokenData.access_token);
+
+    let guildsCache = null;
+    try {
+      guildsCache = await fetchUserGuilds(tokenData.access_token);
+    } catch (guildErr) {
+      console.warn('[auth/callback] initial guilds fetch failed:', guildErr?.message || guildErr);
+    }
+
+    const expiresIn = Number(tokenData.expires_in) || 604800;
     const session = createSession({
       user,
-      discordAccessToken: tokenData.access_token
+      discordAccessToken: tokenData.access_token,
+      discordRefreshToken: tokenData.refresh_token || null,
+      discordTokenExpiresAt: Date.now() + expiresIn * 1000,
+      guildsCache
     });
+
     res.json(session);
   } catch (err) {
     next(err);
