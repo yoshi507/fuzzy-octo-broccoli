@@ -105,9 +105,7 @@ function readPath(guildId, storagePath) {
   }
 
   if (root === 'aiLimit') {
-    const db = loadDatabase();
-    const override = db.dashboard?.[guildId]?.ai?.dailyLimit;
-    return override != null ? override : 20;
+    return 20;
   }
 
   const db = loadDatabase();
@@ -196,10 +194,7 @@ function writePath(guildId, storagePath, value) {
   const db = loadDatabase();
 
   if (root === 'aiLimit') {
-    ensureGuildObj(db, 'dashboard', guildId);
-    if (!db.dashboard[guildId].ai) db.dashboard[guildId].ai = {};
-    db.dashboard[guildId].ai.dailyLimit = Number(value);
-    saveDatabase(db);
+    // Daily AI limit is fixed at 20 and cannot be changed via the dashboard.
     return;
   }
 
