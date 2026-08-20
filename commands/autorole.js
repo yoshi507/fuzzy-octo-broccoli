@@ -4,15 +4,15 @@ const {
 } = require("discord.js");
 
 const {
-    loadDatabase,
-    saveDatabase
+    loadDatabase
 } = require("../database/database.js");
+
+const { mergeGuildConfig } = require("../utils/configSync.js");
 
 module.exports = {
     data: new SlashCommandBuilder()
         .setName("autorole")
         .setDescription("Configure the automatic member role")
-
         .addSubcommand(subcommand =>
             subcommand
                 .setName("set")
@@ -24,39 +24,26 @@ module.exports = {
                         .setRequired(true)
                 )
         )
-
         .addSubcommand(subcommand =>
             subcommand
                 .setName("disable")
                 .setDescription("Disable automatic roles")
         )
-
         .addSubcommand(subcommand =>
             subcommand
                 .setName("view")
                 .setDescription("View the current automatic role")
         )
-
         .setDefaultMemberPermissions(
             PermissionFlagsBits.ManageGuild
         ),
 
     async execute(interaction) {
-
-        const database = loadDatabase();
-
-        if (!database.autorole) {
-            database.autorole = {};
-        }
-
         const guildId = interaction.guild.id;
         const action = interaction.options.getSubcommand();
 
         if (action === "set") {
-
-            const role =
-                interaction.options.getRole("role");
-
+            const role = interaction.options.getRole("role");
             if (
                 role.position >=
                 interaction.guild.members.me.roles.highest.position
@@ -67,58 +54,39 @@ module.exports = {
                     ephemeral: true
                 });
             }
-
-            database.autorole[guildId] = {
+            mergeGuildConfig("autorole", guildId, {
                 enabled: true,
                 roleId: role.id
-            };
-
-            saveDatabase(database);
-
+            });
             return interaction.reply(
                 `✅ New members will now automatically receive ${role}.`
             );
         }
 
         if (action === "disable") {
-
-            database.autorole[guildId] = {
+            mergeGuildConfig("autorole", guildId, {
                 enabled: false,
                 roleId: null
-            };
-
-            saveDatabase(database);
-
+            });
             return interaction.reply(
                 "✅ Automatic roles have been disabled."
             );
         }
 
         if (action === "view") {
-
-            const settings =
-                database.autorole[guildId];
-
-            if (
-                !settings?.enabled ||
-                !settings.roleId
-            ) {
+            const database = loadDatabase();
+            const settings = database.autorole?.[guildId];
+            if (!settings?.enabled || !settings.roleId) {
                 return interaction.reply(
                     "ℹ️ Automatic roles are currently disabled."
                 );
             }
-
-            const role =
-                interaction.guild.roles.cache.get(
-                    settings.roleId
-                );
-
+            const role = interaction.guild.roles.cache.get(settings.roleId);
             if (!role) {
                 return interaction.reply(
                     "⚠️ The configured automatic role no longer exists."
                 );
             }
-
             return interaction.reply(
                 `🎭 Current automatic role: ${role}`
             );

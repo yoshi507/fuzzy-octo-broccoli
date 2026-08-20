@@ -9,6 +9,10 @@ const {
     disable
 } = require("../utils/ai/deadChat.js");
 
+const {
+    mirrorDeadChatToDashboard
+} = require("../utils/configSync.js");
+
 module.exports = {
 
     data: new SlashCommandBuilder()
@@ -76,9 +80,15 @@ module.exports = {
                 {
                     enabled: true,
                     minutes,
-                    lastRevival: 0
+                    lastRevival: 0,
+                    guildId: interaction.guild.id
                 }
             );
+
+            mirrorDeadChatToDashboard(interaction.guild.id, channelId, {
+                enabled: true,
+                minutes
+            });
 
             return interaction.reply(
                 `🧟 **AI Dead Chat Reviver enabled!**\n\nI'll revive this channel after **${minutes} minutes** of inactivity.`
@@ -88,6 +98,10 @@ module.exports = {
         if (subcommand === "disable") {
 
             disable(channelId);
+
+            mirrorDeadChatToDashboard(interaction.guild.id, channelId, {
+                enabled: false
+            });
 
             return interaction.reply(
                 "🧟 AI Dead Chat Reviver has been **disabled** in this channel."
@@ -100,7 +114,6 @@ module.exports = {
                 getSettings(channelId);
 
             if (!settings?.enabled) {
-
                 return interaction.reply(
                     "🧟 AI Dead Chat Reviver is **disabled** in this channel."
                 );
