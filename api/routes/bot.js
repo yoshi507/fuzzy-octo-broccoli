@@ -50,13 +50,25 @@ statsRouter.get('/', requireAuth, async (req, res, next) => {
     const warnings = Array.isArray(db.warnings)
       ? db.warnings.filter((w) => w.guildId === req.params.guildId).length
       : 0;
+    let activeGiveaways = 0;
+    let reactionRolePanels = 0;
+    try {
+      const { listActive } = require('../../utils/giveaways/store.js');
+      activeGiveaways = listActive(req.params.guildId).length;
+    } catch {}
+    try {
+      const { listConfigs } = require('../../utils/reactionRoles/store.js');
+      reactionRolePanels = listConfigs(req.params.guildId).length;
+    } catch {}
     res.json({
       guildId: req.params.guildId,
       members: botGuild.memberCount,
       commandsToday: null,
       aiUsedToday: ai.used,
       aiLimit: ai.limit,
-      warnings
+      warnings,
+      activeGiveaways,
+      reactionRolePanels
     });
   } catch (err) {
     next(err);

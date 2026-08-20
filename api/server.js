@@ -12,6 +12,7 @@ const { botRouter, statsRouter } = require('./routes/bot');
 const { notFound, errorHandler } = require('./middleware/errors');
 const publicAppealsRoutes = require('./routes/publicAppeals');
 const personaRoutes = require('./routes/persona');
+const featuresRoutes = require('./routes/features');
 
 let activeServer = null;
 let activeApp = null;
@@ -75,19 +76,18 @@ function createApiApp(discordClient) {
   app.use(express.json({ limit: '6mb' }));
 
   const generalLimiter = rateLimit({
-    windowMs: 15 * 60 * 1000,
-    max: 300,
+    windowMs: 60 * 1000,
+    max: 120,
     standardHeaders: true,
     legacyHeaders: false,
-    message: { error: true, code: 'RATE_LIMITED', message: 'Too many requests. Please try again later.' }
+    message: { error: true, code: 'RATE_LIMIT', message: 'Too many requests' }
   });
-
   const authLimiter = rateLimit({
-    windowMs: 15 * 60 * 1000,
-    max: 40,
+    windowMs: 60 * 1000,
+    max: 30,
     standardHeaders: true,
     legacyHeaders: false,
-    message: { error: true, code: 'RATE_LIMITED', message: 'Too many auth attempts. Please try again later.' }
+    message: { error: true, code: 'RATE_LIMIT', message: 'Too many auth requests' }
   });
 
   app.use(generalLimiter);
@@ -96,9 +96,9 @@ function createApiApp(discordClient) {
     const client = req.app.locals.discordClient;
     res.json({
       ok: true,
-      botReady: Boolean(client?.readyAt),
+      botReady: Boolean(client?.readyAt || client?.ws),
       guilds: client?.guilds?.cache?.size ?? 0,
-      tls: Boolean(req.socket && req.socket.encrypted),
+      tls: Boolean(loadTlsOptions()),
       timestamp: new Date().toISOString()
     });
   });
@@ -109,16 +109,15 @@ function createApiApp(discordClient) {
   app.use('/guilds/:guildId/persona', personaRoutes);
   app.use('/guilds/:guildId/bot', botRouter);
   app.use('/guilds/:guildId/stats', statsRouter);
+  app.use('/guilds/:guildId/features', featuresRoutes);
   app.use('/appeals', publicAppealsRoutes);
 
   const dashDir = path.resolve(__dirname, '../public/dashboard');
-
   app.get('/', (req, res) => {
     const index = path.join(dashDir, 'index.html');
     if (fs.existsSync(index)) return res.sendFile(path.resolve(index));
     res.json({ ok: true, service: 'OmniBot API', health: '/health' });
   });
-
   if (fs.existsSync(dashDir)) {
     app.use(express.static(dashDir, { index: false, fallthrough: true }));
   }
