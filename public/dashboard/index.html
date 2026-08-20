@@ -6,10 +6,29 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="description" content="OmniBot Dashboard — manage your Discord server configuration" />
     <title>OmniBot Dashboard</title>
-    <script type="module" crossorigin src="/assets/index-CR1e0vlB.js"></script>
     <link rel="stylesheet" crossorigin href="/assets/index-B75IN09f.css">
   </head>
   <body>
     <div id="root"></div>
+    <script type="module">
+      const parts = [
+        '/assets/bundle.gz.b64.0',
+        '/assets/bundle.gz.b64.1',
+        '/assets/bundle.gz.b64.2',
+        '/assets/bundle.gz.b64.3',
+      ];
+      const b64 = (await Promise.all(parts.map(async (p) => {
+        const r = await fetch(p);
+        if (!r.ok) throw new Error('Failed to load ' + p);
+        return r.text();
+      }))).join('');
+      const bin = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+      const ds = new DecompressionStream('gzip');
+      const stream = new Blob([bin]).stream().pipeThrough(ds);
+      const text = await new Response(stream).text();
+      const blob = new Blob([text], { type: 'text/javascript' });
+      const url = URL.createObjectURL(blob);
+      await import(url);
+    </script>
   </body>
 </html>

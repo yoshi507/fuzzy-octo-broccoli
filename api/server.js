@@ -27,19 +27,13 @@ function parseAllowedOrigins() {
   return [...new Set([...defaults, ...fromEnv])];
 }
 
-/**
- * Load TLS credentials if both cert and key paths are configured.
- * Does NOT invent HTTPS — without valid files the server stays plain HTTP.
- */
 function loadTlsOptions() {
   const keyPath = process.env.SSL_KEY_PATH || process.env.TLS_KEY_PATH;
   const certPath = process.env.SSL_CERT_PATH || process.env.TLS_CERT_PATH;
   if (!keyPath || !certPath) return null;
   try {
     if (!fs.existsSync(keyPath) || !fs.existsSync(certPath)) {
-      console.warn(
-        '[API] SSL_KEY_PATH / SSL_CERT_PATH set but file(s) missing — starting HTTP only.'
-      );
+      console.warn('[API] SSL_KEY_PATH / SSL_CERT_PATH set but file(s) missing — starting HTTP only.');
       return null;
     }
     return {
@@ -97,6 +91,7 @@ function createApiApp(discordClient) {
 
   app.use(generalLimiter);
 
+  // API routes first so they are never swallowed by static files
   app.get('/health', (req, res) => {
     const client = req.app.locals.discordClient;
     res.json({
@@ -108,13 +103,6 @@ function createApiApp(discordClient) {
     });
   });
 
-  app.get('/', (req, res) => {
-    const dashDir = path.join(__dirname, '../public/dashboard');
-    const index = path.join(dashDir, 'index.html');
-    if (fs.existsSync(index)) return res.sendFile(index);
-    res.json({ ok: true, service: 'OmniBot API', health: '/health' });
-  });
-
   app.use('/auth', authLimiter, authRoutes);
   app.use('/guilds', guildRoutes);
   app.use('/guilds/:guildId/settings', settingsRoutes);
@@ -122,9 +110,17 @@ function createApiApp(discordClient) {
   app.use('/guilds/:guildId/stats', statsRouter);
   app.use('/appeals', publicAppealsRoutes);
 
-  const dashDir = path.join(__dirname, '../public/dashboard');
+  const dashDir = path.resolve(__dirname, '../public/dashboard');
+
+  // Dashboard home (HashRouter — deep links are #/… so no SPA catch-all needed)
+  app.get('/', (req, res) => {
+    const index = path.join(dashDir, 'index.html');
+    if (fs.existsSync(index)) return res.sendFile(path.resolve(index));
+    res.json({ ok: true, service: 'OmniBot API', health: '/health' });
+  });
+
   if (fs.existsSync(dashDir)) {
-    app.use(express.static(dashDir));
+    app.use(express.static(dashDir, { index: false, fallthrough: true }));
   }
 
   app.use(notFound);
