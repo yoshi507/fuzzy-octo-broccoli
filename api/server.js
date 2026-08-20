@@ -11,6 +11,7 @@ const settingsRoutes = require('./routes/settings');
 const { botRouter, statsRouter } = require('./routes/bot');
 const { notFound, errorHandler } = require('./middleware/errors');
 const publicAppealsRoutes = require('./routes/publicAppeals');
+const personaRoutes = require('./routes/persona');
 
 let activeServer = null;
 let activeApp = null;
@@ -66,12 +67,12 @@ function createApiApp(discordClient) {
         return callback(null, false);
       },
       credentials: false,
-      methods: ['GET', 'POST', 'PUT', 'OPTIONS'],
+      methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
       allowedHeaders: ['Content-Type', 'Authorization']
     })
   );
 
-  app.use(express.json({ limit: '32kb' }));
+  app.use(express.json({ limit: '6mb' }));
 
   const generalLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
@@ -91,7 +92,6 @@ function createApiApp(discordClient) {
 
   app.use(generalLimiter);
 
-  // API routes first so they are never swallowed by static files
   app.get('/health', (req, res) => {
     const client = req.app.locals.discordClient;
     res.json({
@@ -106,13 +106,13 @@ function createApiApp(discordClient) {
   app.use('/auth', authLimiter, authRoutes);
   app.use('/guilds', guildRoutes);
   app.use('/guilds/:guildId/settings', settingsRoutes);
+  app.use('/guilds/:guildId/persona', personaRoutes);
   app.use('/guilds/:guildId/bot', botRouter);
   app.use('/guilds/:guildId/stats', statsRouter);
   app.use('/appeals', publicAppealsRoutes);
 
   const dashDir = path.resolve(__dirname, '../public/dashboard');
 
-  // Dashboard home (HashRouter — deep links are #/… so no SPA catch-all needed)
   app.get('/', (req, res) => {
     const index = path.join(dashDir, 'index.html');
     if (fs.existsSync(index)) return res.sendFile(path.resolve(index));
