@@ -2,6 +2,7 @@ const API = '';
 const INVITE = 'https://discord.com/oauth2/authorize?client_id=1538542627882799155';
 const TOKEN_KEY = 'omnibot_session';
 const GUILD_KEY = 'omnibot_guild';
+const INTENT_KEY = 'omnibot_intent';
 
 const state = {
   token: localStorage.getItem(TOKEN_KEY) || null,
@@ -20,7 +21,14 @@ const state = {
   reactionRoles: null,
   modSummary: null,
   settingsHistory: null,
-  tickets: null
+  tickets: null,
+  mode: localStorage.getItem(INTENT_KEY) === 'appeals' ? 'appeals' : 'dashboard',
+  appealDirectory: [],
+  appealDirectoryMeta: null,
+  appealSearch: '',
+  appealForm: null,
+  appealGuild: null,
+  appealSubmitting: false
 };
 
 function toast(msg, type) {
@@ -80,7 +88,11 @@ function redirectUri() {
 async function loadOAuthConfig() {
   try { state.oauth = await api('/auth/config'); } catch (e) { state.oauth = null; }
 }
-function startLogin() {
+function startLogin(intent) {
+  if (intent === 'appeals' || intent === 'dashboard') {
+    localStorage.setItem(INTENT_KEY, intent);
+    state.mode = intent;
+  }
   const clientId = (state.oauth && state.oauth.clientId) || '1538542627882799155';
   const url = new URL('https://discord.com/api/oauth2/authorize');
   url.searchParams.set('client_id', clientId);
@@ -175,6 +187,7 @@ async function resetPersona() {
 async function logout() {
   try { await api('/auth/logout', { method: 'POST', body: '{}' }); } catch (e) {}
   state.token = null; state.user = null; state.guild = null; state.guilds = [];
+  state.appealForm = null; state.appealGuild = null; state.appealDirectory = [];
   localStorage.removeItem(TOKEN_KEY); localStorage.removeItem(GUILD_KEY);
   render();
 }
@@ -194,8 +207,71 @@ function roleOptions(selected) {
   });
   return html;
 }
+function appealIconUrl(g) {
+  if (!g || !g.icon) return '';
+  return 'https://cdn.discordapp.com/icons/' + g.id + '/' + g.icon + '.png?size=128';
+}
+async function loadAppealDirectory() {
+  const data = await api('/appeals/directory');
+  state.appealDirectory = Array.isArray(data.guilds) ? data.guilds : (Array.isArray(data) ? data : []);
+  state.appealDirectoryMeta = data;
+}
+async function loadAppealForm(guildId) {
+  state.appealForm = await api('/appeals/guilds/' + guildId + '/form');
+  state.appealGuild = state.appealDirectory.find(function (g) { return String(g.id) === String(guildId); }) || {
+    id: guildId,
+    name: state.appealForm.guildName,
+    icon: state.appealForm.guildIcon
+  };
+}
+function renderAppealSelect() {
+  var q = (state.appealSearch || '').trim().toLowerCase();
+  var list = (state.appealDirectory || []).filter(function (g) {
+    if (!q) return true;
+    return String(g.name || '').toLowerCase().indexOf(q) !== -1 || String(g.id).indexOf(q) !== -1;
+  });
+  var meta = state.appealDirectoryMeta || {};
+  var refreshed = meta.refreshedAt ? new Date(meta.refreshedAt).toLocaleString() : '—';
+  var cards = list.map(function (g) {
+    var icon = appealIconUrl(g);
+    return '<div class="guild" data-appeal-id="' + escapeAttr(g.id) + '">' +
+      (icon ? '<img src="' + escapeAttr(icon) + '" alt=""/>' : '<div class="avatar-prev"></div>') +
+      '<div><div style="font-weight:600">' + escapeHtml(g.name) + '</div>' +
+      '<div class="status">' + escapeHtml(g.category || 'ban') + ' appeals</div></div></div>';
+  }).join('') || '<p class="help">No servers match your search, or no servers currently accept appeals.</p>';
+  return '<div class="center"><div style="width:min(720px,100%)"><div class="card">' +
+    '<h2>Appeal a punishment</h2>' +
+    '<p class="help">Search for a server that has OmniBot appeals enabled. The list refreshes about once an hour.</p>' +
+    '<div class="field"><label>Search servers</label><input type="search" id="appealSearch" placeholder="Server name…" value="' + escapeAttr(state.appealSearch || '') + '"/></div>' +
+    '<div class="guild-grid" id="appealGrid">' + cards + '</div>' +
+    '<p class="status" style="margin-top:1rem">Last directory refresh: ' + escapeHtml(refreshed) + ' · ' + list.length + ' shown</p>' +
+    '<div class="row" style="margin-top:1rem"><button class="btn ghost" id="btnBackHome">Back</button><button class="btn ghost" id="btnLogout">Log out</button></div>' +
+    '</div></div></div>';
+}
+function renderAppealFormView() {
+  var form = state.appealForm || {};
+  var g = state.appealGuild || {};
+  var icon = appealIconUrl(g);
+  if (form.openAppealId) {
+    return '<div class="center"><div class="card login-card"><h2>Open appeal already exists</h2><p class="help">You already have open appeal <code>' + escapeHtml(form.openAppealId) + '</code> on <strong>' + escapeHtml(form.guildName || g.name || 'this server') + '</strong>.</p><div class="row"><button class="btn" id="btnBackAppealList">Back to servers</button><button class="btn ghost" id="btnLogout">Log out</button></div></div></div>';
+  }
+  var fields = (form.questions || []).map(function (q) {
+    return '<div class="field"><label>' + escapeHtml(q.label) + (q.required ? ' *' : '') + '</label>' +
+      '<textarea data-appeal-q="' + escapeAttr(q.id) + '" ' + (q.required ? 'required' : '') + ' maxlength="1000" placeholder="Your answer…"></textarea></div>';
+  }).join('') || '<p class="help">This server has no appeal questions configured.</p>';
+  return '<div class="center"><div style="width:min(640px,100%)"><div class="card">' +
+    '<div class="row" style="margin-bottom:1rem">' +
+    (icon ? '<img class="avatar-prev" src="' + escapeAttr(icon) + '" alt=""/>' : '<div class="avatar-prev"></div>') +
+    '<div><h2 style="margin:0">Appeal — ' + escapeHtml(form.guildName || g.name || 'Server') + '</h2>' +
+    '<p class="status">Type: ' + escapeHtml(form.category || 'ban') + '</p></div></div>' +
+    '<p class="help">Answer the questions below. Your appeal will be sent to this server\'s staff appeals channel.</p>' +
+    fields +
+    '<div class="row"><button class="btn" id="btnSubmitAppeal"' + (state.appealSubmitting ? ' disabled' : '') + '>Submit appeal</button>' +
+    '<button class="btn ghost" id="btnBackAppealList">Back</button></div>' +
+    '</div></div></div>';
+}
 function renderLogin() {
-  return '<div class="center"><div class="card login-card"><div style="text-align:center;margin-bottom:1rem"><div class="login-logo"><img src="/logo.svg" alt="OmniBot"/></div><div style="font-size:1.25rem;font-weight:700">OmniBot Dashboard</div></div><p class="help">Manage OmniBot for your Discord servers. Sign in with Discord to continue.</p><button class="btn" id="btnLogin" style="width:100%;margin-bottom:.75rem">Login with Discord</button><a class="btn ghost" style="display:block" href="' + INVITE + '" target="_blank" rel="noopener">Add to Discord</a><p class="status" style="margin-top:1rem">API: same-origin · <a href="/health" target="_blank">/health</a></p></div></div>';
+  return '<div class="center"><div class="card login-card"><div style="text-align:center;margin-bottom:1rem"><div class="login-logo"><img src="/logo.svg" alt="OmniBot"/></div><div style="font-size:1.25rem;font-weight:700">OmniBot</div></div><p class="help">Manage your server, add OmniBot, or appeal a punishment. You will sign in with Discord when needed.</p><button class="btn" id="btnOpenDashboard" style="width:100%;margin-bottom:.75rem">Open Dashboard</button><a class="btn ghost" style="display:block;margin-bottom:.75rem" href="' + INVITE + '" target="_blank" rel="noopener">Add to Discord</a><button class="btn ghost" id="btnAppealPunishment" style="width:100%">Appeal a punishment</button><p class="status" style="margin-top:1rem">API: same-origin · <a href="/health" target="_blank">/health</a></p></div></div>';
 }
 function renderServerSelect() {
   if (!state.guilds.length) return '<div class="center"><div class="card login-card"><h2>No manageable servers</h2><p class="help">You need Manage Server permission on a server where OmniBot is present.</p><button class="btn" id="btnLogout">Log out</button></div></div>';
@@ -292,9 +368,64 @@ function renderDashboard() {
 }
 function bind() {
   var root = document.getElementById('app'); if (!root) return;
-  root.querySelector('#btnLogin')?.addEventListener('click', startLogin);
+  root.querySelector('#btnOpenDashboard')?.addEventListener('click', function () { startLogin('dashboard'); });
+  root.querySelector('#btnLogin')?.addEventListener('click', function () { startLogin('dashboard'); });
+  root.querySelector('#btnAppealPunishment')?.addEventListener('click', function () { startLogin('appeals'); });
+  root.querySelector('#btnBackHome')?.addEventListener('click', function () {
+    state.mode = 'dashboard';
+    localStorage.setItem(INTENT_KEY, 'dashboard');
+    state.appealForm = null;
+    state.appealGuild = null;
+    render();
+  });
+  root.querySelector('#btnBackAppealList')?.addEventListener('click', function () {
+    state.appealForm = null;
+    state.appealGuild = null;
+    render();
+  });
+  var search = root.querySelector('#appealSearch');
+  if (search) {
+    search.addEventListener('input', function () {
+      state.appealSearch = search.value || '';
+      render();
+      var el = document.getElementById('appealSearch');
+      if (el) { el.focus(); try { el.setSelectionRange(el.value.length, el.value.length); } catch (e) {} }
+    });
+  }
+  root.querySelectorAll('[data-appeal-id]').forEach(function (el) {
+    el.addEventListener('click', async function () {
+      try {
+        await loadAppealForm(el.getAttribute('data-appeal-id'));
+        render();
+      } catch (e) { toast(e.message || 'Failed to load appeal form', 'err'); }
+    });
+  });
+  root.querySelector('#btnSubmitAppeal')?.addEventListener('click', async function () {
+    if (!state.appealForm || state.appealSubmitting) return;
+    try {
+      state.appealSubmitting = true;
+      var answers = {};
+      document.querySelectorAll('[data-appeal-q]').forEach(function (ta) {
+        answers[ta.getAttribute('data-appeal-q')] = ta.value || '';
+      });
+      var result = await api('/appeals/guilds/' + state.appealForm.guildId + '/submit', {
+        method: 'POST',
+        body: JSON.stringify({ answers: answers, type: state.appealForm.category || 'ban' })
+      });
+      toast((result && result.message) || ('Appeal ' + (result && result.id ? result.id : '') + ' submitted'), 'ok');
+      state.appealForm = null;
+      state.appealGuild = null;
+      state.appealSubmitting = false;
+      render();
+    } catch (e) {
+      state.appealSubmitting = false;
+      toast(e.message || 'Submit failed', 'err');
+      render();
+    }
+  });
   root.querySelectorAll('#btnLogout').forEach(function (b) { b.addEventListener('click', function () { logout(); }); });
   root.querySelectorAll('.guild').forEach(function (el) {
+    if (el.getAttribute('data-appeal-id')) return;
     el.addEventListener('click', async function () {
       var g = state.guilds.find(function (x) { return String(x.id) === String(el.getAttribute('data-id')); });
       if (!g) return;
@@ -357,7 +488,10 @@ function bind() {
 function render() {
   var root = document.getElementById('app'); if (!root) return;
   if (!state.token) root.innerHTML = renderLogin();
-  else if (!state.guild) root.innerHTML = renderServerSelect();
+  else if (state.mode === 'appeals') {
+    if (state.appealForm) root.innerHTML = renderAppealFormView();
+    else root.innerHTML = renderAppealSelect();
+  } else if (!state.guild) root.innerHTML = renderServerSelect();
   else root.innerHTML = renderDashboard();
   bind();
 }
@@ -367,13 +501,20 @@ async function boot() {
     await handleOAuthCallback();
     if (state.token) {
       try {
-        await loadMe(); await loadGuilds();
-        if (state.guild) {
-          var still = state.guilds.find(function (g) { return String(g.id) === String(state.guild.id); });
-          if (!still) { state.guild = null; localStorage.removeItem(GUILD_KEY); }
-          else { state.guild = still; await loadGuildData(); }
-        } else if (state.guilds.length === 1) {
-          state.guild = state.guilds[0]; localStorage.setItem(GUILD_KEY, JSON.stringify(state.guild)); await loadGuildData();
+        await loadMe();
+        var intent = localStorage.getItem(INTENT_KEY) || 'dashboard';
+        state.mode = intent === 'appeals' ? 'appeals' : 'dashboard';
+        if (state.mode === 'appeals') {
+          await loadAppealDirectory();
+        } else {
+          await loadGuilds();
+          if (state.guild) {
+            var still = state.guilds.find(function (g) { return String(g.id) === String(state.guild.id); });
+            if (!still) { state.guild = null; localStorage.removeItem(GUILD_KEY); }
+            else { state.guild = still; await loadGuildData(); }
+          } else if (state.guilds.length === 1) {
+            state.guild = state.guilds[0]; localStorage.setItem(GUILD_KEY, JSON.stringify(state.guild)); await loadGuildData();
+          }
         }
       } catch (e) {
         toast(e.message || 'Session error', 'err');
