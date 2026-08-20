@@ -9,6 +9,7 @@ const {
     replyAiError
 } = require("../utils/ai/groq.js");
 const { canUseAI } = require("../utils/ai/aiLimit.js");
+const { buildSystemPrompt, DEFAULT_BASE_PROMPT } = require("../utils/persona/store.js");
 
 const {
     getConversation,
@@ -44,7 +45,7 @@ module.exports = {
             const messages = [
                 {
                     role: "system",
-                    content: `You are Omni, a chill, friendly and helpful Discord bot.\n\nPersonality:\n- Chill and natural\n- Friendly\n- Can joke around when appropriate\n- Helpful without being overly formal\n- Keep normal responses reasonably concise\n- Remember the conversation context provided to you\n- Never claim to be human\n\nYou are talking to a user in a Discord server.`
+                    content: buildSystemPrompt(interaction.guild.id, DEFAULT_BASE_PROMPT)
                 },
                 ...history.map(item => ({
                     role: item.role,
