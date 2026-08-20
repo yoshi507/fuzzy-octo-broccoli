@@ -58,9 +58,14 @@ async function fetchUserGuilds(accessToken) {
     headers: { Authorization: `Bearer ${accessToken}` }
   });
   if (!res.ok) {
-    const err = new Error('Failed to fetch Discord guilds');
-    err.status = 401;
-    err.code = 'OAUTH_FAILED';
+    // Use 502 so dashboard does not treat this as an expired OmniBot session
+    const err = new Error(
+      res.status === 401 || res.status === 403
+        ? 'Discord authorization for guilds failed. Please log out and log in again.'
+        : 'Failed to fetch Discord guilds'
+    );
+    err.status = res.status === 401 || res.status === 403 ? 502 : 502;
+    err.code = 'DISCORD_GUILDS_FAILED';
     throw err;
   }
   return res.json();
