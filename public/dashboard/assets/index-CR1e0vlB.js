@@ -1,1 +1,1 @@
-PLACEHOLDER
+(function(){console.log('OmniBot dashboard bundle loading...');document.getElementById('root').innerHTML='<div style="font-family:system-ui;padding:2rem;background:#0f1117;color:#e8eaed;min-height:100vh"><h1>OmniBot Dashboard</h1><p>Bundle assets need a full sync. Run scripts/sync-dashboard.sh after cloning Omnibot-dashboard next to this repo, then restart OmniBot.</p><p><a href="/health" style="color:#5865f2">/health</a> should still work.</p></div>';})();
