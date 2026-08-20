@@ -7,21 +7,33 @@ const {
 } = require("discord.js");
 const { DASHBOARD_URL } = require("../config/botConfig.js");
 
+function resolveDashboardUrl() {
+    let url = String(
+        process.env.DASHBOARD_URL ||
+            DASHBOARD_URL ||
+            "https://omnibot.wisp.uno"
+    ).trim();
+
+    // Never point users at the old IP/port or GitHub Pages dashboard
+    if (/78\.154\.103\.20/i.test(url) || /github\.io/i.test(url)) {
+        url = "https://omnibot.wisp.uno";
+    }
+
+    url = url.replace(/\/+$/, "");
+    if (!/^https?:\/\//i.test(url)) {
+        url = "https://omnibot.wisp.uno";
+    }
+
+    return url;
+}
+
 module.exports = {
     data: new SlashCommandBuilder()
         .setName("dashboard")
         .setDescription("Open the OmniBot web dashboard"),
 
     async execute(interaction) {
-        let url = String(
-            process.env.DASHBOARD_URL ||
-                DASHBOARD_URL ||
-                "http://78.154.103.20:13893/#/login"
-        ).trim();
-
-        if (interaction.guildId && url.includes("#/")) {
-            url = url.replace(/#\/.*/, `#/login?guild=${interaction.guildId}`);
-        }
+        const url = resolveDashboardUrl();
 
         const embed = new EmbedBuilder()
             .setColor(0x5865f2)
@@ -41,10 +53,7 @@ module.exports = {
             new ButtonBuilder()
                 .setLabel("Open OmniBot Dashboard")
                 .setStyle(ButtonStyle.Link)
-                .setURL(
-                    process.env.DASHBOARD_URL ||
-                        "http://78.154.103.20:13893/#/login"
-                )
+                .setURL(url)
         );
 
         await interaction.reply({
