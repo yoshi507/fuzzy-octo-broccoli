@@ -27,6 +27,13 @@ module.exports = {
             return;
         }
 
+        try {
+            const { touchActivity } = require("../utils/ai/deadChat.js");
+            touchActivity(message.channel.id);
+        } catch {
+            /* non-fatal */
+        }
+
         let wasInvocation = false;
         try {
             wasInvocation = await handleTextInvocation(message);
@@ -40,184 +47,149 @@ module.exports = {
 
         try {
             const database = loadDatabase();
-            const translationSettings =
+
+            const autoTranslate =
                 database.autoTranslate?.[message.guild.id];
 
             if (
-                translationSettings?.enabled &&
-                translationSettings.language &&
-                message.content &&
-                message.content.trim().length > 0
+                autoTranslate?.enabled &&
+                autoTranslate.target &&
+                !message.content.startsWith("/")
             ) {
-                const content = message.content.trim();
-                const translationResult = await translateText(
-                    content,
-                    translationSettings.language
+                const translated = await translateText(
+                    message.content,
+                    autoTranslate.target
                 );
-                const translation = translationResult?.text;
+
                 if (
-                    translation &&
-                    translation.trim().toLowerCase() !== content.toLowerCase()
+                    translated &&
+                    translated.toLowerCase() !==
+                        message.content.toLowerCase()
                 ) {
                     await message.reply({
-                        content: `🌍 **${translationSettings.language}:** ${translation}`,
+                        content:
+                            `🌐 **Auto-translate → ${autoTranslate.target}**\n${translated}`,
                         allowedMentions: { repliedUser: false }
-                    });
+                    }).catch(() => {});
                 }
             }
         } catch (error) {
-            console.error(
-                "Auto translation error:",
-                error?.code || error?.message || error
-            );
-        }
-
-        const database = loadDatabase();
-
-        const automod = database.automod?.[message.guild.id];
-
-        if (automod?.enabled && message.content) {
-            const content = message.content.toLowerCase();
-
-            const defaultBlocked = [
-                "fuck",
-                "fucker",
-                "fucking",
-                "shit",
-                "bitch",
-                "cunt",
-                "nigger",
-                "nigga"
-            ];
-            const customBlocked = String(automod.blockedWords || "")
-                .split(/[\n,]+/)
-                .map((w) => w.trim().toLowerCase())
-                .filter(Boolean);
-            const blockedWords = [...new Set([...defaultBlocked, ...customBlocked])];
-
-            const hasBadWord = blockedWords.some(word =>
-                content.includes(word)
-            );
-
-            const hasInvite =
-                /discord(?:\.gg|\.com\/invite)\/[a-z0-9-]+/i.test(
-                    message.content
+            if (error?.code !== "TRANSLATE_FAILED") {
+                console.error(
+                    "Auto-translate error:",
+                    error?.message || error
                 );
-
-            if (hasBadWord || hasInvite) {
-                try {
-                    await message.delete();
-
-                    const warning = await message.channel.send({
-                        content: `⚠️ ${message.author}, your message was removed by AutoMod.`
-                    });
-
-                    setTimeout(() => {
-                        warning.delete().catch(() => {});
-                    }, 5000);
-                } catch (error) {
-                    console.error("AutoMod error:", error);
-                }
-
-                return;
             }
-        }
-
-        if (!database.spam) {
-            database.spam = {};
-        }
-
-        if (!database.spam[message.guild.id]) {
-            database.spam[message.guild.id] = {};
-        }
-
-        const spamEnabled =
-            database.spamConfig?.[message.guild.id]?.enabled !== false;
-
-        if (spamEnabled) {
-            const guildSpam = database.spam[message.guild.id];
-            const userId = message.author.id;
-            const now = Date.now();
-
-            if (!guildSpam[userId]) {
-                guildSpam[userId] = {
-                    messages: [],
-                    warned: false
-                };
-            }
-
-            const userData = guildSpam[userId];
-            userData.messages = userData.messages.filter(
-                timestamp => now - timestamp < 5000
-            );
-            userData.messages.push(now);
-
-            if (userData.messages.length >= 5) {
-                try {
-                    await message.delete();
-                } catch (error) {
-                    console.error("Anti-spam delete error:", error);
-                }
-
-                if (!userData.warned) {
-                    userData.warned = true;
-
-                    if (
-                        message.member &&
-                        message.member.moderatable
-                    ) {
-                        try {
-                            await message.member.timeout(
-                                10 * 1000,
-                                "Automatic anti-spam protection"
-                            );
-
-                            await sendModLog(message.guild, {
-                                action: "Timeout",
-                                user: message.author,
-                                moderator: message.client.user,
-                                reason: "Automatic anti-spam protection"
-                            });
-                        } catch (error) {
-                            console.error("Anti-spam timeout error:", error);
-                        }
-                    }
-
-                    try {
-                        const warning = await message.channel.send({
-                            content: `⚠️ ${message.author}, please stop spamming.`
-                        });
-
-                        setTimeout(() => {
-                            warning.delete().catch(() => {});
-                        }, 5000);
-                    } catch (error) {
-                        console.error("Anti-spam warning error:", error);
-                    }
-                }
-
-                return;
-            }
-        }
-
-        const settings = database.levelSettings?.[message.guild.id];
-
-        if (settings?.enabled === false) {
-            return;
         }
 
         try {
-            const result = await addXP(
-                message.guild.id,
-                message.author.id
-            );
+            const database = loadDatabase();
+            const automod = database.automod?.[message.guild.id];
 
-            if (result && result.levelledUp) {
-                await message.channel.send(
-                    `🎉 ${message.author} reached **Level ${result.level}**!`
+            if (automod?.enabled && Array.isArray(automod.blockedWords)) {
+                const content = message.content.toLowerCase();
+                const hit = automod.blockedWords.find((w) =>
+                    w && content.includes(String(w).toLowerCase())
                 );
 
-                await handleLevelUpRole(message.member, result.level);
+                if (hit) {
+                    await message.delete().catch(() => {});
+                    await message.channel
+                        .send({
+                            content: `${message.author}, that message was removed by AutoMod.`,
+                            allowedMentions: { users: [message.author.id] }
+                        })
+                        .then((m) => {
+                            setTimeout(() => m.delete().catch(() => {}), 5000);
+                        })
+                        .catch(() => {});
+
+                    await sendModLog(message.guild, {
+                        title: "AutoMod",
+                        description: `Blocked word in ${message.channel}`,
+                        userId: message.author.id,
+                        moderatorId: message.client.user.id,
+                        reason: `Matched: ${hit}`
+                    }).catch(() => {});
+
+                    return;
+                }
+            }
+        } catch (error) {
+            console.error("Automod error:", error?.message || error);
+        }
+
+        try {
+            const database = loadDatabase();
+
+            if (!database.spam) database.spam = {};
+            if (!database.spam[message.guild.id]) {
+                database.spam[message.guild.id] = {};
+            }
+
+            const spamEnabled =
+                database.spamConfig?.[message.guild.id]?.enabled !== false;
+
+            if (spamEnabled) {
+                const guildSpam = database.spam[message.guild.id];
+                const userId = message.author.id;
+                const now = Date.now();
+
+                if (!guildSpam[userId]) {
+                    guildSpam[userId] = [];
+                }
+
+                guildSpam[userId] = guildSpam[userId].filter(
+                    (t) => now - t < 7000
+                );
+                guildSpam[userId].push(now);
+                saveDatabase(database);
+
+                if (guildSpam[userId].length >= 6) {
+                    const member = message.member;
+                    if (member?.moderatable) {
+                        await member
+                            .timeout(60_000, "Anti-spam")
+                            .catch(() => {});
+                    }
+                    guildSpam[userId] = [];
+                    saveDatabase(database);
+                    await message.channel
+                        .send(
+                            `${message.author} slowed down — anti-spam timeout applied.`
+                        )
+                        .catch(() => {});
+                }
+            }
+        } catch (error) {
+            console.error("Anti-spam error:", error?.message || error);
+        }
+
+        try {
+            const database = loadDatabase();
+            const settings = database.levelSettings?.[message.guild.id];
+
+            if (settings?.enabled !== false) {
+                const result = addXP(
+                    message.guild.id,
+                    message.author.id,
+                    message.member
+                );
+
+                if (result?.leveledUp) {
+                    await handleLevelUpRole(
+                        message.member,
+                        result.level
+                    ).catch(() => {});
+
+                    if (settings?.announce !== false) {
+                        await message.channel
+                            .send(
+                                `🎉 ${message.author} reached **level ${result.level}**!`
+                            )
+                            .catch(() => {});
+                    }
+                }
             }
         } catch (error) {
             console.error("Leveling error:", error?.message || error);
