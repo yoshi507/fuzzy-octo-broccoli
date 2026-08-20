@@ -9,6 +9,8 @@ const {
     saveDatabase
 } = require("../database/database.js");
 
+const { mergeGuildConfig } = require("../utils/configSync.js");
+
 module.exports = {
     data: new SlashCommandBuilder()
         .setName("goodbye")
@@ -35,21 +37,13 @@ module.exports = {
 
         const message =
             interaction.options.getString("message") ||
-            "👋 Goodbye **{username}**! We'll miss you!";
+            "👋 **{username}** left **{server}**.";
 
-        const database = loadDatabase();
-
-        if (!database.goodbyeSettings) {
-            database.goodbyeSettings = {};
-        }
-
-        database.goodbyeSettings[interaction.guild.id] = {
+        mergeGuildConfig("goodbyeSettings", interaction.guild.id, {
             enabled: true,
             channelId: channel.id,
             message: message
-        };
-
-        saveDatabase(database);
+        });
 
         await interaction.reply(
             `✅ Goodbye messages are now enabled in ${channel}!\n\n` +

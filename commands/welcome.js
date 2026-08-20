@@ -9,6 +9,8 @@ const {
     saveDatabase
 } = require("../database/database.js");
 
+const { mergeGuildConfig } = require("../utils/configSync.js");
+
 module.exports = {
     data: new SlashCommandBuilder()
         .setName("welcome")
@@ -37,19 +39,11 @@ module.exports = {
             interaction.options.getString("message") ||
             "👋 Welcome {user} to **{server}**! You are member **#{membercount}**.";
 
-        const database = loadDatabase();
-
-        if (!database.welcomeSettings) {
-            database.welcomeSettings = {};
-        }
-
-        database.welcomeSettings[interaction.guild.id] = {
+        mergeGuildConfig("welcomeSettings", interaction.guild.id, {
             enabled: true,
             channelId: channel.id,
             message: message
-        };
-
-        saveDatabase(database);
+        });
 
         await interaction.reply(
             `✅ Welcome messages are now enabled in ${channel}!\n\n` +
