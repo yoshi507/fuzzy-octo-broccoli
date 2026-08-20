@@ -1,10 +1,5 @@
 (async function () {
-  const parts = [
-    '/assets/bundle.gz.b64.0',
-    '/assets/bundle.gz.b64.1',
-    '/assets/bundle.gz.b64.2',
-    '/assets/bundle.gz.b64.3',
-  ];
+  const parts = Array.from({ length: 20 }, (_, i) => '/assets/b' + i);
   const b64 = (
     await Promise.all(
       parts.map(async (p) => {
