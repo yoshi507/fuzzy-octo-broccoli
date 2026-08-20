@@ -1,6 +1,5 @@
 const SETTINGS = [
   { id: 'ai.enabled', type: 'boolean', default: true, path: 'dashboard.ai.enabled' },
-  { id: 'ai.dailyLimit', type: 'number', default: 20, min: 1, max: 500, path: 'aiLimit.dailyLimit' },
   { id: 'ai.memoryEnabled', type: 'boolean', default: true, path: 'dashboard.ai.memoryEnabled' },
   { id: 'ai.memoryMaxMessages', type: 'number', default: 12, min: 2, max: 40, path: 'dashboard.ai.memoryMaxMessages' },
   { id: 'ai.naturalInvocation', type: 'boolean', default: true, path: 'dashboard.ai.naturalInvocation' },
