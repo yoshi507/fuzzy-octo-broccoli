@@ -1,6 +1,5 @@
 const express = require('express');
 const { requireAuth } = require('../middleware/auth');
-const { fetchUserGuilds } = require('../services/discordOAuth');
 const {
   getSettings,
   createAppeal,
@@ -11,27 +10,86 @@ const {
 
 const router = express.Router();
 
+/** In-memory directory of guilds with appeals enabled. Refreshed at most once per hour. */
+let directoryCache = {
+  at: 0,
+  guilds: []
+};
+
+const DIRECTORY_TTL_MS = 60 * 60 * 1000;
+
 function getClient(req) {
   return req.app.locals.discordClient;
 }
 
-router.get('/guilds', requireAuth, async (req, res, next) => {
+function guildIconHash(guild) {
+  return guild?.icon || null;
+}
+
+function buildDirectory(client) {
+  const out = [];
+  if (!client?.guilds?.cache) return out;
+  for (const guild of client.guilds.cache.values()) {
+    try {
+      const settings = getSettings(guild.id);
+      if (!settings?.enabled) continue;
+      out.push({
+        id: guild.id,
+        name: guild.name,
+        icon: guildIconHash(guild),
+        category: settings.category || 'ban',
+        memberCount: guild.memberCount || null
+      });
+    } catch {
+      /* skip broken guild entries */
+    }
+  }
+  out.sort((a, b) => String(a.name).localeCompare(String(b.name)));
+  return out;
+}
+
+function getAppealsDirectory(client, { force } = {}) {
+  const now = Date.now();
+  if (
+    !force &&
+    directoryCache.at &&
+    now - directoryCache.at < DIRECTORY_TTL_MS &&
+    Array.isArray(directoryCache.guilds)
+  ) {
+    return {
+      guilds: directoryCache.guilds,
+      refreshedAt: directoryCache.at,
+      nextRefreshAt: directoryCache.at + DIRECTORY_TTL_MS,
+      cached: true
+    };
+  }
+  const guilds = buildDirectory(client);
+  directoryCache = { at: now, guilds };
+  return {
+    guilds,
+    refreshedAt: now,
+    nextRefreshAt: now + DIRECTORY_TTL_MS,
+    cached: false
+  };
+}
+
+/**
+ * Public directory of servers that accept appeals through OmniBot.
+ * Requires login so only real Discord users can browse / submit.
+ * Membership is NOT required (banned users still need to appeal).
+ */
+router.get('/directory', requireAuth, async (req, res, next) => {
   try {
     const client = getClient(req);
-    const guilds = await fetchUserGuilds(req.session.discordAccessToken);
-    const out = [];
-    for (const g of guilds) {
-      if (!client?.guilds?.cache?.has(g.id)) continue;
-      const settings = getSettings(g.id);
-      if (!settings.enabled) continue;
-      out.push({
-        id: g.id,
-        name: g.name,
-        icon: g.icon,
-        category: settings.category || 'ban'
-      });
+    if (!client) {
+      const err = new Error('Bot is offline');
+      err.status = 503;
+      err.code = 'BOT_OFFLINE';
+      throw err;
     }
-    res.json(out);
+    const force = String(req.query.force || '') === '1';
+    const payload = getAppealsDirectory(client, { force });
+    res.json(payload);
   } catch (err) {
     next(err);
   }
@@ -52,12 +110,6 @@ router.get('/guilds/:guildId/form', requireAuth, async (req, res, next) => {
       err.code = 'BOT_NOT_IN_GUILD';
       throw err;
     }
-    const userGuilds = await fetchUserGuilds(req.session.discordAccessToken);
-    if (!userGuilds.some((g) => g.id === guildId)) {
-      const err = new Error('You are not associated with this server');
-      err.status = 403;
-      throw err;
-    }
     const settings = getSettings(guildId);
     if (!settings.enabled) {
       const err = new Error('Appeals are disabled on this server');
@@ -66,16 +118,19 @@ router.get('/guilds/:guildId/form', requireAuth, async (req, res, next) => {
       throw err;
     }
     const guild = client.guilds.cache.get(guildId);
+    const open = findOpenByUser(guildId, req.user.id);
     res.json({
       guildId,
       guildName: guild?.name || 'Server',
+      guildIcon: guildIconHash(guild),
       category: settings.category || 'ban',
       questions: (settings.questions || []).map((q) => ({
         id: q.id,
         label: q.label,
         required: Boolean(q.required)
       })),
-      pendingMessage: settings.pendingMessage
+      pendingMessage: settings.pendingMessage,
+      openAppealId: open?.id || null
     });
   } catch (err) {
     next(err);
@@ -94,18 +149,15 @@ router.post('/guilds/:guildId/submit', requireAuth, async (req, res, next) => {
     if (!client?.guilds?.cache?.has(guildId)) {
       const err = new Error('OmniBot is not in this server');
       err.status = 404;
+      err.code = 'BOT_NOT_IN_GUILD';
       throw err;
     }
-    const userGuilds = await fetchUserGuilds(req.session.discordAccessToken);
-    if (!userGuilds.some((g) => g.id === guildId)) {
-      const err = new Error('You are not associated with this server');
-      err.status = 403;
-      throw err;
-    }
+
     const settings = getSettings(guildId);
     if (!settings.enabled) {
       const err = new Error('Appeals are disabled on this server');
       err.status = 403;
+      err.code = 'APPEALS_DISABLED';
       throw err;
     }
 
@@ -113,14 +165,15 @@ router.post('/guilds/:guildId/submit', requireAuth, async (req, res, next) => {
     const open = findOpenByUser(guildId, userId);
     if (open) {
       const err = new Error(
-        `You already have an open appeal (${open.id}). Wait for staff to review it.`
+        `You already have an open appeal (${open.id}) on this server.`
       );
       err.status = 409;
       err.code = 'APPEAL_OPEN';
       throw err;
     }
 
-    const cooldownMs = (settings.cooldownHours || 72) * 60 * 60 * 1000;
+    const cooldownHours = Number(settings.cooldownHours) || 72;
+    const cooldownMs = cooldownHours * 60 * 60 * 1000;
     const last = lastClosedAt(guildId, userId);
     if (last && Date.now() - last < cooldownMs) {
       const hoursLeft = Math.ceil((cooldownMs - (Date.now() - last)) / 3600000);
@@ -142,25 +195,59 @@ router.post('/guilds/:guildId/submit', requireAuth, async (req, res, next) => {
         err.code = 'VALIDATION';
         throw err;
       }
-      if (val != null) answers[q.id] = String(val).slice(0, 1000);
+      if (val != null && String(val).trim()) {
+        answers[q.id] = String(val).slice(0, 1000);
+      }
     }
 
     const appeal = createAppeal(guildId, {
       userId,
       username: req.user.global_name || req.user.username,
-      type: settings.category || 'ban',
+      type: req.body?.type || settings.category || 'ban',
       answers
     });
 
     try {
       if (settings.channelId) {
-        const ch = client.guilds.cache.get(guildId)?.channels?.cache?.get(settings.channelId);
-        if (ch?.isTextBased?.()) {
-          await ch.send({
-            content:
-              `📨 **New appeal** \`${appeal.id}\` from <@${userId}> (${appeal.username})\n` +
-              `Type: **${appeal.type}** · Status: **pending**`
+        const guild = client.guilds.cache.get(guildId);
+        const ch = guild?.channels?.cache?.get(settings.channelId);
+        if (ch && typeof ch.send === 'function') {
+          const lines = (settings.questions || []).map((q) => {
+            const ans = answers[q.id] || '—';
+            return `**${q.label}**\n${ans}`;
           });
+          const body =
+            `📨 **New appeal** \`${appeal.id}\`\n` +
+            `From: <@${userId}> (\`${userId}\`) · **${appeal.username}**\n` +
+            `Type: **${appeal.type}** · Status: **pending**\n\n` +
+            lines.join('\n\n');
+
+          const chunks = [];
+          if (body.length <= 1900) {
+            chunks.push(body);
+          } else {
+            chunks.push(
+              `📨 **New appeal** \`${appeal.id}\` from <@${userId}> (${appeal.username})\nType: **${appeal.type}** · Status: **pending**`
+            );
+            for (const q of settings.questions || []) {
+              const ans = answers[q.id] || '—';
+              chunks.push(`**${q.label}**\n${String(ans).slice(0, 900)}`);
+            }
+          }
+
+          let firstMsg = null;
+          for (const chunk of chunks) {
+            const msg = await ch.send({ content: chunk.slice(0, 2000) });
+            if (!firstMsg) firstMsg = msg;
+          }
+
+          if (firstMsg) {
+            const { updateAppeal } = require('../../utils/appeals/store.js');
+            updateAppeal(guildId, appeal.id, {
+              messageId: firstMsg.id,
+              channelId: ch.id
+            });
+          }
         }
       }
     } catch (notifyErr) {
@@ -180,20 +267,20 @@ router.post('/guilds/:guildId/submit', requireAuth, async (req, res, next) => {
 router.get('/mine', requireAuth, async (req, res, next) => {
   try {
     const client = getClient(req);
-    const userGuilds = await fetchUserGuilds(req.session.discordAccessToken);
     const mine = [];
-    for (const g of userGuilds) {
-      if (!client?.guilds?.cache?.has(g.id)) continue;
-      for (const a of listAppeals(g.id)) {
-        if (a.userId === req.user.id) {
-          mine.push({
-            id: a.id,
-            guildId: g.id,
-            guildName: g.name,
-            status: a.status,
-            createdAt: a.createdAt,
-            updatedAt: a.updatedAt
-          });
+    if (client?.guilds?.cache) {
+      for (const guild of client.guilds.cache.values()) {
+        for (const a of listAppeals(guild.id)) {
+          if (a.userId === req.user.id) {
+            mine.push({
+              id: a.id,
+              guildId: guild.id,
+              guildName: guild.name,
+              status: a.status,
+              createdAt: a.createdAt,
+              updatedAt: a.updatedAt
+            });
+          }
         }
       }
     }
