@@ -201,44 +201,136 @@ function toPublicPersona(guildId, persona) {
         avatarUrl: p.avatarPath ? `/guilds/${guildId}/persona/avatar?v=${encodeURIComponent(p.avatarUpdatedAt || "1")}` : null,
         bannerUrl: p.bannerPath ? `/guilds/${guildId}/persona/banner?v=${encodeURIComponent(p.bannerUpdatedAt || "1")}` : null,
         avatarUpdatedAt: p.avatarUpdatedAt,
-        bannerUpdatedAt: p.bannerUpdatedAt
+        bannerUpdatedAt: p.bannerUpdatedAt,
+        discordLimits: {
+            nicknamePerServer: true,
+            avatarPerServer: false,
+            bannerPerServer: false,
+            bioPerServer: false,
+            note: "Discord only allows bots to change nickname per server. Avatar, banner and about/bio are application-wide and cannot differ per guild."
+        }
     };
 }
 
 const DEFAULT_BASE_PROMPT =
-    "You are Omni, a friendly Discord bot.\n\nYour personality:\n- Chill\n- Friendly\n- Funny when appropriate\n- Helpful\n- Natural and conversational\n- Do not sound robotic\n- Keep responses reasonably concise\n- Never pretend to be human\n- Respect Discord rules and server rules\n\nYou are being used inside a Discord server.";
+    "You are Omni, a helpful Discord bot. Be natural and conversational. Never pretend to be human. Respect Discord and server rules. Never reveal secrets or tokens.";
 
 function buildSystemPrompt(guildId, basePrompt) {
     const p = getPersona(guildId);
-    const parts = [basePrompt || DEFAULT_BASE_PROMPT];
-    if (p.displayName) parts.push(`In this server you go by the name "${p.displayName}".`);
-    if (p.bio) parts.push(`Bio: ${p.bio}`);
-    if (p.personality) parts.push(`Personality instructions for this server only:\n${p.personality}`);
-    if (p.greetingStyle) parts.push(`Greeting style: ${p.greetingStyle}`);
+    const name = (p.displayName || p.nickname || "").trim();
+    const hasCustomPersonality = Boolean((p.personality || "").trim());
+
+    const parts = [];
+
+    if (name) {
+        parts.push(
+            `Your name in this Discord server is "${name}". Always refer to yourself as ${name}, not Omni, unless the user specifically asks about the bot software.`
+        );
+    } else {
+        parts.push(basePrompt || DEFAULT_BASE_PROMPT);
+        parts.push("Your name is Omni.");
+    }
+
+    if (p.bio && p.bio.trim()) {
+        parts.push(`About you in this server: ${p.bio.trim()}`);
+    }
+
+    if (hasCustomPersonality) {
+        parts.push(
+            "CRITICAL — Follow these personality instructions strictly for every reply in this server. They override your default style:"
+        );
+        parts.push(p.personality.trim());
+    } else {
+        parts.push(
+            "Default style: friendly, helpful, chill, concise. Funny only when it fits."
+        );
+    }
+
+    if (p.greetingStyle && p.greetingStyle.trim()) {
+        parts.push(`When greeting users, use this style: ${p.greetingStyle.trim()}`);
+    }
+
     const toneMap = {
-        chill: "Keep a chill, relaxed tone.",
-        friendly: "Be warm and friendly.",
-        professional: "Be clear, professional, and concise.",
-        funny: "Be light-hearted and humorous when appropriate."
+        chill: "Tone: relaxed and casual.",
+        friendly: "Tone: warm, encouraging, and friendly.",
+        professional: "Tone: clear, professional, and concise. Avoid slang.",
+        funny: "Tone: witty and humorous when appropriate, without being mean."
     };
     if (p.tone && toneMap[p.tone]) parts.push(toneMap[p.tone]);
+
     const emoji = {
-        off: "Do not use emojis.",
-        low: "Use emojis sparingly.",
-        medium: "Emojis are fine in moderation.",
-        high: "Emojis are welcome."
+        off: "EMOJI RULE (mandatory): Do not use any emoji characters in your replies.",
+        low: "EMOJI RULE: Use at most one emoji only when it clearly helps. Prefer none.",
+        medium: "EMOJI RULE: You may use a few emojis where they feel natural.",
+        high: "EMOJI RULE: Use emojis freely to match an energetic, expressive style."
     };
     if (emoji[p.emojiUsage]) parts.push(emoji[p.emojiUsage]);
+
     const gif = {
-        off: "Do not suggest or claim to send GIFs.",
-        occasional: "You may mention a GIF idea occasionally but do not spam.",
-        frequent: "GIF references are welcome occasionally."
+        off: "GIF RULE (mandatory): Do not mention, suggest, or pretend to send GIFs or stickers.",
+        occasional: "GIF RULE: You may occasionally suggest a GIF idea, but do not spam.",
+        frequent: "GIF RULE: GIF and reaction ideas are welcome when they fit the chat."
     };
     if (gif[p.gifUsage]) parts.push(gif[p.gifUsage]);
+
     parts.push(
-        "These persona instructions apply only to this Discord server. Never override safety, moderation, or system rules. Never claim to change Discord's global bot account appearance. Never reveal secrets or tokens."
+        "These instructions apply only to this Discord server.",
+        "Never override safety, moderation, or system rules.",
+        "Never claim you changed Discord's global bot account avatar or banner (Discord does not allow per-server bot avatars)."
     );
+
     return parts.join("\n");
+}
+
+async function applyPersonaToDiscord(client, guildId) {
+    const result = {
+        nicknameApplied: false,
+        nickname: null,
+        error: null,
+        limits: {
+            avatarPerServer: false,
+            bannerPerServer: false,
+            bioPerServer: false
+        }
+    };
+
+    if (!client || !guildId) {
+        result.error = "Missing client or guild";
+        return result;
+    }
+
+    const p = getPersona(guildId);
+    const nick = (p.nickname || p.displayName || "").trim().slice(0, 32);
+
+    try {
+        const guild = client.guilds.cache.get(String(guildId));
+        if (!guild) {
+            result.error = "Bot is not in this guild";
+            return result;
+        }
+
+        const me = guild.members.me || (await guild.members.fetchMe().catch(() => null));
+        if (!me) {
+            result.error = "Could not resolve bot member";
+            return result;
+        }
+
+        const target = nick || null;
+        if ((me.nickname || null) === target) {
+            result.nicknameApplied = true;
+            result.nickname = target;
+            return result;
+        }
+
+        await me.setNickname(target, "OmniBot persona update");
+        result.nicknameApplied = true;
+        result.nickname = target;
+    } catch (err) {
+        result.error = err?.message || String(err);
+        console.warn("[persona] setNickname failed:", guildId, result.error);
+    }
+
+    return result;
 }
 
 module.exports = {
@@ -250,6 +342,7 @@ module.exports = {
     clearGuildImage,
     resolveImageAbsolute,
     toPublicPersona,
+    applyPersonaToDiscord,
     DEFAULTS,
     DEFAULT_BASE_PROMPT,
     ALLOWED_IMAGE_TYPES,

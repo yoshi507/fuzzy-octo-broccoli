@@ -10,7 +10,8 @@ const {
   saveGuildImage,
   clearGuildImage,
   resolveImageAbsolute,
-  toPublicPersona
+  toPublicPersona,
+  applyPersonaToDiscord
 } = require('../../utils/persona/store');
 
 const router = express.Router({ mergeParams: true });
@@ -29,6 +30,18 @@ function sendImage(res, relPath) {
   res.setHeader('Content-Type', type);
   res.setHeader('Cache-Control', 'public, max-age=3600');
   fs.createReadStream(abs).pipe(res);
+}
+
+async function applyAndRespond(req, res, persona) {
+  const client = req.app.locals.discordClient;
+  let discord = null;
+  try {
+    discord = await applyPersonaToDiscord(client, req.params.guildId);
+  } catch (err) {
+    discord = { nicknameApplied: false, error: err?.message || String(err) };
+  }
+  const publicPersona = toPublicPersona(req.params.guildId, persona);
+  res.json({ ...publicPersona, discordApply: discord });
 }
 
 router.get('/', requireAuth, async (req, res, next) => {
@@ -54,7 +67,7 @@ router.put('/', requireAuth, async (req, res, next) => {
       gifUsage: body.gifUsage,
       greetingStyle: body.greetingStyle
     });
-    res.json(toPublicPersona(req.params.guildId, updated));
+    await applyAndRespond(req, res, updated);
   } catch (err) {
     next(err);
   }
@@ -64,7 +77,7 @@ router.post('/reset', requireAuth, async (req, res, next) => {
   try {
     await assertCanManage(req, req.params.guildId);
     const updated = resetPersona(req.params.guildId);
-    res.json(toPublicPersona(req.params.guildId, updated));
+    await applyAndRespond(req, res, updated);
   } catch (err) {
     next(err);
   }
