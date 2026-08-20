@@ -113,7 +113,6 @@ function addTopic(
 
     all[channelId].topics.push(topic);
 
-    // Keep only the last 25 topics
     if (
         all[channelId].topics.length > 25
     ) {
@@ -133,10 +132,36 @@ function getTopics(channelId) {
     return settings?.topics || [];
 }
 
+function listEnabledChannels() {
+    const all = loadSettings();
+    const out = [];
+    for (const [channelId, settings] of Object.entries(all || {})) {
+        if (settings && settings.enabled) {
+            out.push({
+                channelId,
+                minutes: Number(settings.minutes) > 0 ? Number(settings.minutes) : 30,
+                lastRevival: Number(settings.lastRevival) || 0,
+                lastActivity: Number(settings.lastActivity) || 0,
+                guildId: settings.guildId || null
+            });
+        }
+    }
+    return out;
+}
+
+function touchActivity(channelId) {
+    const all = loadSettings();
+    if (!all[channelId] || !all[channelId].enabled) return;
+    all[channelId].lastActivity = Date.now();
+    saveSettings(all);
+}
+
 module.exports = {
     getSettings,
     setSettings,
     disable,
     addTopic,
-    getTopics
+    getTopics,
+    listEnabledChannels,
+    touchActivity
 };
