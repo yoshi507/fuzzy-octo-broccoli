@@ -1,6 +1,8 @@
 const express = require('express');
 const cors = require('cors');
 const rateLimit = require('express-rate-limit');
+const path = require('path');
+const fs = require('fs');
 const authRoutes = require('./routes/auth');
 const { router: guildRoutes } = require('./routes/guilds');
 const settingsRoutes = require('./routes/settings');
@@ -8,9 +10,7 @@ const { botRouter, statsRouter } = require('./routes/bot');
 const { notFound, errorHandler } = require('./middleware/errors');
 const publicAppealsRoutes = require('./routes/publicAppeals');
 
-/** @type {import('http').Server | null} */
 let activeServer = null;
-/** @type {import('express').Express | null} */
 let activeApp = null;
 
 function parseAllowedOrigins() {
@@ -18,7 +18,8 @@ function parseAllowedOrigins() {
   const defaults = [
     'https://yoshi507.github.io',
     'http://localhost:5173',
-    'http://127.0.0.1:5173'
+    'http://127.0.0.1:5173',
+    'http://78.154.103.20:13893'
   ];
   const fromEnv = raw.split(',').map((s) => s.trim()).filter(Boolean);
   return [...new Set([...defaults, ...fromEnv])];
@@ -79,7 +80,10 @@ function createApiApp(discordClient) {
     });
   });
 
-  app.get('/', (req, res) => {
+  app.get('/', (req, res, next) => {
+    const dashDir = path.join(__dirname, '../public/dashboard');
+    const index = path.join(dashDir, 'index.html');
+    if (fs.existsSync(index)) return res.sendFile(index);
     res.json({ ok: true, service: 'OmniBot API', health: '/health' });
   });
 
@@ -90,6 +94,11 @@ function createApiApp(discordClient) {
   app.use('/guilds/:guildId/stats', statsRouter);
   app.use('/appeals', publicAppealsRoutes);
 
+  const dashDir = path.join(__dirname, '../public/dashboard');
+  if (fs.existsSync(dashDir)) {
+    app.use(express.static(dashDir));
+  }
+
   app.use(notFound);
   app.use(errorHandler);
   return app;
@@ -99,16 +108,11 @@ function startApiServer(discordClient) {
   if (activeApp && discordClient) {
     activeApp.locals.discordClient = discordClient;
   }
-
-  if (activeServer) {
-    return activeServer;
-  }
+  if (activeServer) return activeServer;
 
   const port = Number(process.env.PORT);
   if (!Number.isFinite(port) || port <= 0) {
-    console.warn(
-      '⚠️ API server not started: set PORT environment variable for the dashboard API (Wispbyte provides this).'
-    );
+    console.warn('⚠️ API server not started: set PORT environment variable.');
     return null;
   }
 
@@ -116,19 +120,10 @@ function startApiServer(discordClient) {
     activeApp = createApiApp(discordClient);
     activeServer = activeApp.listen(port, '0.0.0.0', () => {
       console.log(`🌐 OmniBot API listening on 0.0.0.0:${port}`);
-      try {
-        const { activeResourceSummary } = require('../utils/processDiagnostics.js');
-        console.log('[DIAG] resources after listening callback:', JSON.stringify(activeResourceSummary()));
-      } catch (_) {}
     });
-
     activeServer.on('error', (err) => {
       console.error('❌ API server error:', err?.code || err?.message || err);
-      if (err && err.code === 'EADDRINUSE') {
-        console.error('[DIAG] PORT already in use — another process may be bound to this port.');
-      }
     });
-
     return activeServer;
   } catch (err) {
     console.error('❌ Failed to start API server:', err?.message || err);
@@ -139,9 +134,7 @@ function startApiServer(discordClient) {
 }
 
 function setDiscordClient(discordClient) {
-  if (activeApp) {
-    activeApp.locals.discordClient = discordClient;
-  }
+  if (activeApp) activeApp.locals.discordClient = discordClient;
 }
 
 module.exports = { startApiServer, createApiApp, setDiscordClient };
