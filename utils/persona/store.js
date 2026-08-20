@@ -215,6 +215,8 @@ function toPublicPersona(guildId, persona) {
     };
 }
 
+const { appendStyleRules } = require("./promptRules.js");
+
 const DEFAULT_BASE_PROMPT =
     "You are Omni, a helpful Discord bot. Be natural and conversational. Never pretend to be human. Respect Discord and server rules. Never reveal secrets or tokens.";
 
@@ -226,7 +228,6 @@ function buildSystemPrompt(guildId, basePrompt) {
 
     const parts = [];
 
-    // Identity first
     if (name) {
         parts.push(
             `Your name in this Discord server is "${name}". Always refer to yourself as ${name}, not Omni, unless the user specifically asks about the bot software.`
@@ -237,51 +238,7 @@ function buildSystemPrompt(guildId, basePrompt) {
 
     parts.push(basePrompt || DEFAULT_BASE_PROMPT);
 
-    // Custom per-server personality MUST drive style when configured
-    if (hasCustomPersonality) {
-        parts.push(
-            "=== SERVER PERSONALITY (HIGHEST PRIORITY FOR STYLE) ===",
-            "The server administrator configured how you must behave in THIS Discord server.",
-            "Follow these personality instructions for every reply. They override your default tone and wording style:",
-            customPersonality,
-            "=== END SERVER PERSONALITY ==="
-        );
-    } else {
-        parts.push(
-            "Default style: friendly, helpful, chill, concise. Funny only when it fits."
-        );
-    }
-
-    if (p.bio && p.bio.trim()) {
-        parts.push(`About you in this server: ${p.bio.trim()}`);
-    }
-
-    if (p.greetingStyle && p.greetingStyle.trim()) {
-        parts.push(`When greeting users, use this style: ${p.greetingStyle.trim()}`);
-    }
-
-    const toneMap = {
-        chill: "Tone: relaxed and casual.",
-        friendly: "Tone: warm, encouraging, and friendly.",
-        professional: "Tone: clear, professional, and concise. Avoid slang.",
-        funny: "Tone: witty and humorous when appropriate, without being mean."
-    };
-    if (p.tone && toneMap[p.tone]) parts.push(toneMap[p.tone]);
-
-    const emoji = {
-        off: "EMOJI RULE (mandatory): Do not use any emoji characters in your replies.",
-        low: "EMOJI RULE: Use at most one emoji only when it clearly helps. Prefer none.",
-        medium: "EMOJI RULE: You may use a few emojis where they feel natural.",
-        high: "EMOJI RULE: Use emojis freely to match an energetic, expressive style."
-    };
-    if (emoji[p.emojiUsage]) parts.push(emoji[p.emojiUsage]);
-
-    const gif = {
-        off: "GIF RULE (mandatory): Do not mention, suggest, or pretend to send GIFs or stickers.",
-        occasional: "GIF RULE: You may occasionally suggest a GIF idea, but do not spam.",
-        frequent: "GIF RULE: GIF and reaction ideas are welcome when they fit the chat."
-    };
-    if (gif[p.gifUsage]) parts.push(gif[p.gifUsage]);
+    appendStyleRules(parts, p, customPersonality, hasCustomPersonality);
 
     parts.push(
         "These instructions apply only to this Discord server.",
