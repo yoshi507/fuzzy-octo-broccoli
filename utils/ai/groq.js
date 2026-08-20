@@ -7,6 +7,7 @@ const {
     getUsage,
     getResetDescription
 } = require("./aiLimit.js");
+const { buildSystemPrompt, DEFAULT_BASE_PROMPT } = require("../persona/store.js");
 
 if (!process.env.GROQ_API_KEY) {
     console.warn("⚠️ GROQ_API_KEY is missing from environment variables");
@@ -148,12 +149,18 @@ async function askAI(messages, options = {}) {
 }
 
 async function askOmni(userMessage, context = [], options = {}) {
+    const guildId = options.guildId;
+    const systemContent = `${buildSystemPrompt(guildId, DEFAULT_BASE_PROMPT)}
+
+Conversation context:
+${context
+    .map(message => `${message.role}: ${message.content}`)
+    .join("\n")}`;
+
     const messages = [
         {
             role: "system",
-            content: `You are Omni, a friendly Discord bot.\n\nYour personality:\n- Chill\n- Friendly\n- Funny when appropriate\n- Helpful\n- Natural and conversational\n- Do not sound robotic\n- Keep responses reasonably concise\n- Never pretend to be human\n- Respect Discord rules and server rules\n\nYou are being used inside a Discord server.\n\nConversation context:\n${context
-    .map(message => `${message.role}: ${message.content}`)
-    .join("\n")}`
+            content: systemContent
         },
         {
             role: "user",
