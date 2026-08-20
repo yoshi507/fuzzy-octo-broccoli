@@ -1,0 +1,627 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>OmniBot Dashboard</title>
+<style>
+:root{--bg:#0b0d12;--panel:#12151c;--panel2:#181c27;--border:#2a3142;--text:#e8eaed;--muted:#9aa3b5;--accent:#5865F2;--accent2:#4752c4;--ok:#3ba55d;--warn:#faa81a;--err:#ed4245;--radius:12px;--shadow:0 8px 24px rgba(0,0,0,.35)}
+*{box-sizing:border-box}body{margin:0;font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--text);min-height:100vh}
+a{color:var(--accent);text-decoration:none}button,input,select,textarea{font:inherit}
+.btn{appearance:none;border:0;border-radius:10px;padding:.7rem 1.1rem;background:var(--accent);color:#fff;font-weight:600;cursor:pointer;transition:.15s}
+.btn:hover{background:var(--accent2)}.btn:disabled{opacity:.55;cursor:not-allowed}
+.btn.ghost{background:transparent;border:1px solid var(--border);color:var(--text)}.btn.ghost:hover{border-color:#4a5568}
+.btn.danger{background:var(--err)}.btn.sm{padding:.4rem .75rem;font-size:.875rem}
+.layout{display:grid;grid-template-columns:260px 1fr;min-height:100vh}
+.sidebar{background:var(--panel);border-right:1px solid var(--border);padding:1.25rem;display:flex;flex-direction:column;gap:1rem}
+.brand{display:flex;align-items:center;gap:.75rem;font-weight:700;font-size:1.15rem}
+.brand .logo{width:36px;height:36px;border-radius:10px;background:linear-gradient(135deg,#5865F2,#9b59b6);display:grid;place-items:center}
+.nav{display:flex;flex-direction:column;gap:.25rem;flex:1}
+.nav button{text-align:left;background:transparent;border:0;color:var(--muted);padding:.65rem .8rem;border-radius:8px;cursor:pointer}
+.nav button.active,.nav button:hover{background:var(--panel2);color:var(--text)}
+.main{padding:1.5rem;max-width:1100px}
+.topbar{display:flex;justify-content:space-between;align-items:center;gap:1rem;margin-bottom:1.25rem;flex-wrap:wrap}
+.card{background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);padding:1.25rem;margin-bottom:1rem;box-shadow:var(--shadow)}
+.card h2{margin:0 0 .35rem;font-size:1.15rem}.card p.help{margin:.25rem 0 1rem;color:var(--muted);font-size:.9rem}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:1rem}
+label{display:block;font-size:.85rem;color:var(--muted);margin-bottom:.35rem}
+input[type=text],input[type=number],select,textarea{width:100%;background:var(--panel2);border:1px solid var(--border);border-radius:8px;color:var(--text);padding:.65rem .75rem}
+textarea{min-height:120px;resize:vertical}
+.row{display:flex;gap:.75rem;flex-wrap:wrap;align-items:center}
+.toast{position:fixed;right:1rem;bottom:1rem;background:var(--panel2);border:1px solid var(--border);padding:.85rem 1rem;border-radius:10px;max-width:360px;z-index:50;box-shadow:var(--shadow)}
+.toast.err{border-color:var(--err)}.toast.ok{border-color:var(--ok)}
+.hidden{display:none!important}
+.center{min-height:100vh;display:grid;place-items:center;padding:1.5rem}
+.login-card{width:min(420px,100%);text-align:center}
+.guild-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:1rem}
+.guild{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:1rem;cursor:pointer;display:flex;gap:.75rem;align-items:center;transition:.15s}
+.guild:hover{border-color:var(--accent)}
+.guild img,.avatar-prev{width:48px;height:48px;border-radius:50%;object-fit:cover;background:#222}
+.banner-prev{width:100%;height:120px;object-fit:cover;border-radius:10px;background:#1a1f2b;border:1px solid var(--border)}
+.field{margin-bottom:1rem}
+.switch{display:flex;align-items:center;justify-content:space-between;gap:1rem;padding:.6rem 0;border-bottom:1px solid var(--border)}
+.switch:last-child{border-bottom:0}
+.status{font-size:.85rem;color:var(--muted)}
+.pill{display:inline-block;padding:.15rem .5rem;border-radius:999px;background:#243;color:#9fd;font-size:.75rem}
+@media(max-width:860px){.layout{grid-template-columns:1fr}.sidebar{border-right:0;border-bottom:1px solid var(--border)}.grid2{grid-template-columns:1fr}.nav{flex-direction:row;flex-wrap:wrap}}
+</style>
+</head>
+<body>
+<div id="app"></div>
+<div id="toast" class="toast hidden"></div>
+<script>
+const API = '';
+const INVITE = 'https://discord.com/oauth2/authorize?client_id=1538542627882799155';
+const TOKEN_KEY = 'omnibot_session';
+const GUILD_KEY = 'omnibot_guild';
+
+const state = {
+  token: localStorage.getItem(TOKEN_KEY) || null,
+  user: null,
+  guilds: [],
+  guild: JSON.parse(localStorage.getItem(GUILD_KEY) || 'null'),
+  section: 'overview',
+  settings: null,
+  persona: null,
+  channels: [],
+  roles: [],
+  oauth: null,
+  loading: false
+};
+
+function toast(msg, type='') {
+  const el = document.getElementById('toast');
+  el.className = 'toast ' + type;
+  el.textContent = msg;
+  el.classList.remove('hidden');
+  clearTimeout(toast._t);
+  toast._t = setTimeout(() => el.classList.add('hidden'), 4200);
+}
+
+async function api(path, opts={}) {
+  const headers = Object.assign({'Content-Type':'application/json'}, opts.headers||{});
+  if (state.token) headers.Authorization = 'Bearer ' + state.token;
+  const res = await fetch(API + path, Object.assign({}, opts, { headers }));
+  if (res.status === 204) return null;
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const err = new Error(data.message || data.error || ('HTTP ' + res.status));
+    err.status = res.status;
+    err.code = data.code;
+    if (res.status === 401) {
+      state.token = null;
+      localStorage.removeItem(TOKEN_KEY);
+    }
+    throw err;
+  }
+  return data;
+}
+
+function iconUrl(g) {
+  if (!g?.icon) return '';
+  return `https://cdn.discordapp.com/icons/${g.id}/${g.icon}.png?size=128`;
+}
+
+async function loadOAuthConfig() {
+  try { state.oauth = await api('/auth/config'); } catch (e) { state.oauth = null; }
+}
+
+function redirectUri() {
+  return window.location.origin + window.location.pathname.replace(/\/?$/,'/');
+}
+
+function startLogin() {
+  const clientId = state.oauth?.clientId || '1538542627882799155';
+  const redir = redirectUri();
+  const url = new URL('https://discord.com/api/oauth2/authorize');
+  url.searchParams.set('client_id', clientId);
+  url.searchParams.set('response_type', 'code');
+  url.searchParams.set('redirect_uri', redir);
+  url.searchParams.set('scope', 'identify guilds');
+  window.location.href = url.toString();
+}
+
+async function handleOAuthCallback() {
+  const params = new URLSearchParams(window.location.search);
+  const code = params.get('code');
+  if (!code) return false;
+  try {
+    const session = await api('/auth/callback', {
+      method: 'POST',
+      body: JSON.stringify({ code, redirectUri: redirectUri() })
+    });
+    state.token = session.accessToken;
+    state.user = session.user;
+    localStorage.setItem(TOKEN_KEY, state.token);
+    history.replaceState({}, '', window.location.pathname);
+    return true;
+  } catch (e) {
+    toast('Login failed: ' + e.message, 'err');
+    history.replaceState({}, '', window.location.pathname);
+    return false;
+  }
+}
+
+async function loadMe() {
+  if (!state.token) return;
+  state.user = await api('/auth/me');
+}
+
+async function loadGuilds() {
+  state.guilds = await api('/guilds');
+}
+
+async function loadGuildData() {
+  if (!state.guild) return;
+  const id = state.guild.id;
+  const [settings, persona, channels, roles] = await Promise.all([
+    api('/guilds/' + id + '/settings'),
+    api('/guilds/' + id + '/persona'),
+    api('/guilds/' + id + '/channels').catch(()=>[]),
+    api('/guilds/' + id + '/roles').catch(()=>[])
+  ]);
+  state.settings = settings;
+  state.persona = persona;
+  state.channels = channels;
+  state.roles = roles;
+}
+
+function setGuild(g) {
+  state.guild = g;
+  localStorage.setItem(GUILD_KEY, JSON.stringify(g));
+  state.section = 'overview';
+  render();
+  loadGuildData().then(render).catch(e => toast(e.message,'err'));
+}
+
+function fileToDataUrl(file, maxMB) {
+  return new Promise((resolve, reject) => {
+    if (!file || !file.type.startsWith('image/')) return reject(new Error('Please choose an image file'));
+    if (file.size > maxMB * 1024 * 1024) return reject(new Error('Image too large (max ' + maxMB + 'MB)'));
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(new Error('Failed to read file'));
+    reader.readAsDataURL(file);
+  });
+}
+
+async function savePersona(patch) {
+  const id = state.guild.id;
+  state.persona = await api('/guilds/' + id + '/persona', {
+    method: 'PUT',
+    body: JSON.stringify(patch)
+  });
+  toast('Personality saved', 'ok');
+  render();
+}
+
+async function uploadImage(kind, file) {
+  const max = kind === 'banner' ? 4 : 2;
+  const dataUrl = await fileToDataUrl(file, max);
+  const id = state.guild.id;
+  state.persona = await api('/guilds/' + id + '/persona/' + kind, {
+    method: 'PUT',
+    body: JSON.stringify({ dataUrl })
+  });
+  toast((kind === 'banner' ? 'Banner' : 'Avatar') + ' updated', 'ok');
+  render();
+}
+
+async function clearImage(kind) {
+  const id = state.guild.id;
+  state.persona = await api('/guilds/' + id + '/persona/' + kind, { method: 'DELETE' });
+  toast((kind === 'banner' ? 'Banner' : 'Avatar') + ' removed', 'ok');
+  render();
+}
+
+async function resetPersona() {
+  if (!confirm('Reset personality for this server to defaults?')) return;
+  const id = state.guild.id;
+  state.persona = await api('/guilds/' + id + '/persona/reset', { method: 'POST', body: '{}' });
+  toast('Persona reset', 'ok');
+  render();
+}
+
+async function saveSettings(patch) {
+  const id = state.guild.id;
+  state.settings = await api('/guilds/' + id + '/settings', {
+    method: 'PUT',
+    body: JSON.stringify({ patch })
+  });
+  toast('Settings saved', 'ok');
+  render();
+}
+
+async function logout() {
+  try { await api('/auth/logout', { method: 'POST', body: '{}' }); } catch {}
+  state.token = null;
+  state.user = null;
+  state.guild = null;
+  localStorage.removeItem(TOKEN_KEY);
+  localStorage.removeItem(GUILD_KEY);
+  render();
+}
+
+function escapeHtml(s) {
+  return String(s||'').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+function escapeAttr(s) { return escapeHtml(s); }
+function opt(v, cur) { return `<option value="${v}" ${cur===v?'selected':''}>${v}</option>`; }
+function navBtn(id, label) { return `<button data-section="${id}" class="${state.section===id?'active':''}">${label}</button>`; }
+function settingVal(id) { return state.settings && state.settings[id] !== undefined ? state.settings[id] : ''; }
+
+function renderLogin() {
+  return `
+  <div class="center">
+    <div class="card login-card">
+      <div class="brand" style="justify-content:center;margin-bottom:1rem">
+        <div class="logo">O</div><div>OmniBot Dashboard</div>
+      </div>
+      <p class="help">Manage OmniBot for your Discord servers. Sign in with Discord to continue.</p>
+      <button class="btn" id="btnLogin" style="width:100%;margin-bottom:.75rem">Login with Discord</button>
+      <a class="btn ghost" style="display:block" href="${INVITE}" target="_blank" rel="noopener">Add to Discord</a>
+      <p class="status" style="margin-top:1rem">API: same-origin · <a href="/health" target="_blank">/health</a></p>
+    </div>
+  </div>`;
+}
+
+function renderServerSelect() {
+  const cards = state.guilds.map(g => `
+    <div class="guild" data-id="${g.id}">
+      ${g.icon ? `<img src="${iconUrl(g)}" alt=""/>` : `<div class="avatar-prev"></div>`}
+      <div>
+        <div style="font-weight:600">${escapeHtml(g.name)}</div>
+        <div class="status">${g.owner ? 'Owner' : 'Manager'} · ${g.approximate_member_count || '?'} members</div>
+      </div>
+    </div>`).join('');
+  return `
+  <div class="center" style="align-content:start;padding-top:3rem">
+    <div style="width:min(900px,100%)">
+      <div class="topbar">
+        <div>
+          <h1 style="margin:0">Select a server</h1>
+          <p class="help">Only servers you can manage and where OmniBot is present are listed.</p>
+        </div>
+        <div class="row">
+          <span class="status">${escapeHtml(state.user?.global_name || state.user?.username || '')}</span>
+          <button class="btn ghost sm" id="btnLogout">Logout</button>
+        </div>
+      </div>
+      ${state.guilds.length ? `<div class="guild-grid">${cards}</div>` :
+        `<div class="card"><p>No eligible servers. Add OmniBot and ensure you have Manage Server permission.</p>
+         <a class="btn" href="${INVITE}" target="_blank">Add to Discord</a></div>`}
+    </div>
+  </div>`;
+}
+
+function renderOverview() {
+  const s = state.settings || {};
+  const enabled = Object.keys(s).filter(k => k.endsWith('.enabled') && s[k] === true).length;
+  return `
+  <div class="card">
+    <h2>${escapeHtml(state.guild.name)}</h2>
+    <p class="help">OmniBot is connected to this server. Use the sidebar to configure features.</p>
+    <div class="grid2">
+      <div><div class="status">Enabled feature flags</div><div style="font-size:1.6rem;font-weight:700">${enabled}</div></div>
+      <div><div class="status">Members (approx)</div><div style="font-size:1.6rem;font-weight:700">${state.guild.approximate_member_count || '—'}</div></div>
+    </div>
+  </div>
+  <div class="card">
+    <h2>Quick links</h2>
+    <div class="row">
+      <button class="btn sm" data-section="persona">Edit personality</button>
+      <button class="btn ghost sm" data-section="security">Security</button>
+      <button class="btn ghost sm" data-section="appeals">Appeals</button>
+    </div>
+  </div>`;
+}
+
+function renderPersona(p) {
+  const avatarSrc = p.avatarUrl ? (API + p.avatarUrl) : '';
+  const bannerSrc = p.bannerUrl ? (API + p.bannerUrl) : '';
+  return `
+  <div class="card">
+    <h2>Bot Personality</h2>
+    <p class="help">Customize how Omni behaves in <strong>${escapeHtml(state.guild.name)}</strong>. Personality instructions are injected into AI responses for this server only.</p>
+    ${bannerSrc ? `<img class="banner-prev" src="${bannerSrc}" alt="Banner"/>` : `<div class="banner-prev"></div>`}
+    <div class="row" style="margin:1rem 0">
+      ${avatarSrc ? `<img class="avatar-prev" src="${avatarSrc}" alt="Avatar"/>` : `<div class="avatar-prev"></div>`}
+      <div>
+        <div class="field"><label>Avatar image</label>
+          <input type="file" id="avatarFile" accept="image/png,image/jpeg,image/webp,image/gif"/>
+        </div>
+        <div class="row">
+          <button class="btn sm" id="btnUploadAvatar">Upload avatar</button>
+          <button class="btn ghost sm" id="btnClearAvatar">Remove</button>
+        </div>
+      </div>
+    </div>
+    <div class="field"><label>Banner image</label>
+      <input type="file" id="bannerFile" accept="image/png,image/jpeg,image/webp,image/gif"/>
+      <div class="row" style="margin-top:.5rem">
+        <button class="btn sm" id="btnUploadBanner">Upload banner</button>
+        <button class="btn ghost sm" id="btnClearBanner">Remove</button>
+      </div>
+    </div>
+    <div class="grid2">
+      <div class="field"><label>Display name</label>
+        <input type="text" id="pDisplayName" maxlength="32" value="${escapeAttr(p.displayName||'')}" placeholder="Omni"/>
+      </div>
+      <div class="field"><label>Nickname</label>
+        <input type="text" id="pNickname" maxlength="32" value="${escapeAttr(p.nickname||'')}"/>
+      </div>
+    </div>
+    <div class="field"><label>Bio / about</label>
+      <textarea id="pBio" maxlength="500" placeholder="Short description shown for this server">${escapeHtml(p.bio||'')}</textarea>
+    </div>
+    <div class="field"><label>Personality instructions</label>
+      <textarea id="pPersonality" maxlength="2000" style="min-height:160px" placeholder="You are a friendly and funny community assistant. Keep responses short...">${escapeHtml(p.personality||'')}</textarea>
+      <p class="help">These instructions affect Omni's AI replies in this server.</p>
+    </div>
+    <div class="field"><label>Greeting style</label>
+      <input type="text" id="pGreeting" maxlength="300" value="${escapeAttr(p.greetingStyle||'')}" placeholder="Casual waves and short hellos"/>
+    </div>
+    <div class="grid2">
+      <div class="field"><label>Tone</label>
+        <select id="pTone">${opt('chill',p.tone)} ${opt('friendly',p.tone)} ${opt('professional',p.tone)} ${opt('funny',p.tone)}</select>
+      </div>
+      <div class="field"><label>Emoji usage</label>
+        <select id="pEmoji">${opt('off',p.emojiUsage)} ${opt('low',p.emojiUsage)} ${opt('medium',p.emojiUsage)} ${opt('high',p.emojiUsage)}</select>
+      </div>
+    </div>
+    <div class="field"><label>GIF usage</label>
+      <select id="pGif">${opt('off',p.gifUsage)} ${opt('occasional',p.gifUsage)} ${opt('frequent',p.gifUsage)}</select>
+    </div>
+    <div class="row">
+      <button class="btn" id="btnSavePersona">Save personality</button>
+      <button class="btn ghost" id="btnResetPersona">Reset to default</button>
+    </div>
+  </div>`;
+}
+
+function renderToggleGroup(title, toggles, fields) {
+  const tHtml = toggles.map(([id,label]) => `
+    <div class="switch">
+      <span>${label}</span>
+      <input type="checkbox" data-setting="${id}" ${settingVal(id)===true?'checked':''}/>
+    </div>`).join('');
+  const fHtml = (fields||[]).map(([id,label,type,options]) => {
+    if (type === 'channel') {
+      const opts = state.channels.map(c => `<option value="${c.id}" ${String(settingVal(id))===c.id?'selected':''}>#${escapeHtml(c.name)}</option>`).join('');
+      return `<div class="field"><label>${label}</label><select data-setting="${id}"><option value="">— none —</option>${opts}</select></div>`;
+    }
+    if (type === 'select') {
+      const opts = options.map(o => `<option value="${o}" ${settingVal(id)===o?'selected':''}>${o}</option>`).join('');
+      return `<div class="field"><label>${label}</label><select data-setting="${id}">${opts}</select></div>`;
+    }
+    if (type === 'number') {
+      return `<div class="field"><label>${label}</label><input type="number" data-setting="${id}" value="${escapeAttr(settingVal(id))}"/></div>`;
+    }
+    return `<div class="field"><label>${label}</label><input type="text" data-setting="${id}" value="${escapeAttr(settingVal(id))}"/></div>`;
+  }).join('');
+  return `
+  <div class="card">
+    <h2>${title}</h2>
+    <p class="help">Settings are stored per Discord server.</p>
+    ${tHtml}
+    <div class="grid2" style="margin-top:1rem">${fHtml}</div>
+    <div class="row" style="margin-top:1rem"><button class="btn" id="btnSaveSettings">Save changes</button></div>
+  </div>`;
+}
+
+function renderDashboard() {
+  const g = state.guild;
+  const p = state.persona || {};
+  const sections = {
+    overview: renderOverview(),
+    persona: renderPersona(p),
+    ai: renderToggleGroup('AI & Commands', [
+      ['ai.enabled','AI enabled'],
+      ['ai.naturalInvocation','Natural invocation (omni …)'],
+      ['ai.memoryEnabled','Conversation memory']
+    ], [
+      ['ai.dailyLimit','Daily AI limit', 'number'],
+      ['ai.commandPrefix','Command prefix', 'text'],
+      ['ai.memoryMaxMessages','Memory messages', 'number']
+    ]),
+    security: renderToggleGroup('Security / Anti-nuke', [
+      ['security.enabled','Security enabled'],
+      ['security.autoTimeoutExecutor','Auto-timeout executor']
+    ], [
+      ['security.mode','Mode','select',['monitor','alert','lockdown']],
+      ['security.windowSeconds','Window (seconds)','number'],
+      ['security.thresholdChannelDelete','Channel delete threshold','number'],
+      ['security.thresholdRoleDelete','Role delete threshold','number'],
+      ['security.autoTimeoutMinutes','Timeout minutes','number']
+    ]),
+    moderation: renderToggleGroup('Moderation', [
+      ['moderation.automodEnabled','Automod'],
+      ['moderation.antiSpamEnabled','Anti-spam']
+    ], [
+      ['moderation.blockedWords','Blocked words','text'],
+      ['moderation.modLogChannel','Mod log channel','channel']
+    ]),
+    leveling: renderToggleGroup('Leveling', [
+      ['leveling.enabled','Enabled'],
+      ['leveling.announceLevelUp','Announce level-up']
+    ], [
+      ['leveling.xpMin','XP min','number'],
+      ['leveling.xpMax','XP max','number'],
+      ['leveling.cooldownSeconds','Cooldown (s)','number']
+    ]),
+    welcome: renderToggleGroup('Welcome / Goodbye', [
+      ['welcome.enabled','Welcome enabled'],
+      ['goodbye.enabled','Goodbye enabled']
+    ], [
+      ['welcome.channel','Welcome channel','channel'],
+      ['welcome.message','Welcome message','text'],
+      ['goodbye.channel','Goodbye channel','channel'],
+      ['goodbye.message','Goodbye message','text']
+    ]),
+    appeals: renderToggleGroup('Appeals', [
+      ['appeals.enabled','Enabled'],
+      ['appeals.logEnabled','Log appeals']
+    ], [
+      ['appeals.channel','Appeals channel','channel'],
+      ['appeals.cooldownHours','Cooldown (hours)','number'],
+      ['appeals.acceptMessage','Accept message','text'],
+      ['appeals.rejectMessage','Reject message','text'],
+      ['appeals.pendingMessage','Pending message','text']
+    ]),
+    quiz: renderToggleGroup('Quiz', [
+      ['quiz.enabled','Enabled'],
+      ['quiz.rewardsEnabled','Rewards'],
+      ['quiz.leaderboardEnabled','Leaderboard']
+    ], [
+      ['quiz.channel','Quiz channel','channel'],
+      ['quiz.questionCount','Questions','number'],
+      ['quiz.timeLimitSeconds','Time limit (s)','number'],
+      ['quiz.pointsCorrect','Points correct','number'],
+      ['quiz.streakBonus','Streak bonus','number'],
+      ['quiz.cooldownSeconds','Cooldown (s)','number']
+    ]),
+    deadchat: renderToggleGroup('Dead Chat', [
+      ['deadchat.enabled','Enabled']
+    ], [
+      ['deadchat.minutes','Idle minutes','number']
+    ])
+  };
+
+  return `
+  <div class="layout">
+    <aside class="sidebar">
+      <div class="brand"><div class="logo">O</div><div>OmniBot</div></div>
+      <div class="status">${escapeHtml(g.name)}</div>
+      <nav class="nav">
+        ${navBtn('overview','Overview')}
+        ${navBtn('persona','Personality')}
+        ${navBtn('ai','AI & Commands')}
+        ${navBtn('security','Security')}
+        ${navBtn('moderation','Moderation')}
+        ${navBtn('leveling','Leveling')}
+        ${navBtn('welcome','Welcome')}
+        ${navBtn('appeals','Appeals')}
+        ${navBtn('quiz','Quiz')}
+        ${navBtn('deadchat','Dead Chat')}
+      </nav>
+      <div class="row">
+        <button class="btn ghost sm" id="btnSwitch">Switch server</button>
+        <button class="btn ghost sm" id="btnLogout">Logout</button>
+      </div>
+      <a class="btn sm" href="${INVITE}" target="_blank">Add to Discord</a>
+    </aside>
+    <main class="main">
+      <div class="topbar">
+        <div>
+          <h1 style="margin:0;text-transform:capitalize">${state.section === 'persona' ? 'Bot Personality' : state.section}</h1>
+          <div class="status">Per-server configuration · changes apply to this guild only</div>
+        </div>
+        <span class="pill">Live API</span>
+      </div>
+      ${sections[state.section] || sections.overview}
+    </main>
+  </div>`;
+}
+
+function bind() {
+  const root = document.getElementById('app');
+  root.querySelector('#btnLogin')?.addEventListener('click', startLogin);
+  root.querySelector('#btnLogout')?.addEventListener('click', () => logout());
+  root.querySelector('#btnSwitch')?.addEventListener('click', () => {
+    state.guild = null;
+    localStorage.removeItem(GUILD_KEY);
+    render();
+  });
+  root.querySelectorAll('.guild').forEach(node => {
+    node.addEventListener('click', () => {
+      const g = state.guilds.find(x => x.id === node.dataset.id);
+      if (g) setGuild(g);
+    });
+  });
+  root.querySelectorAll('[data-section]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      state.section = btn.getAttribute('data-section');
+      render();
+    });
+  });
+  root.querySelector('#btnSavePersona')?.addEventListener('click', async () => {
+    try {
+      await savePersona({
+        displayName: document.getElementById('pDisplayName').value,
+        nickname: document.getElementById('pNickname').value,
+        bio: document.getElementById('pBio').value,
+        personality: document.getElementById('pPersonality').value,
+        greetingStyle: document.getElementById('pGreeting').value,
+        tone: document.getElementById('pTone').value,
+        emojiUsage: document.getElementById('pEmoji').value,
+        gifUsage: document.getElementById('pGif').value
+      });
+    } catch (e) { toast(e.message,'err'); }
+  });
+  root.querySelector('#btnResetPersona')?.addEventListener('click', () => resetPersona().catch(e => toast(e.message,'err')));
+  root.querySelector('#btnUploadAvatar')?.addEventListener('click', async () => {
+    try {
+      const f = document.getElementById('avatarFile').files[0];
+      if (!f) return toast('Choose an image first','err');
+      await uploadImage('avatar', f);
+    } catch (e) { toast(e.message,'err'); }
+  });
+  root.querySelector('#btnUploadBanner')?.addEventListener('click', async () => {
+    try {
+      const f = document.getElementById('bannerFile').files[0];
+      if (!f) return toast('Choose an image first','err');
+      await uploadImage('banner', f);
+    } catch (e) { toast(e.message,'err'); }
+  });
+  root.querySelector('#btnClearAvatar')?.addEventListener('click', () => clearImage('avatar').catch(e => toast(e.message,'err')));
+  root.querySelector('#btnClearBanner')?.addEventListener('click', () => clearImage('banner').catch(e => toast(e.message,'err')));
+  root.querySelector('#btnSaveSettings')?.addEventListener('click', async () => {
+    try {
+      const patch = {};
+      root.querySelectorAll('[data-setting]').forEach(el => {
+        const id = el.getAttribute('data-setting');
+        if (el.type === 'checkbox') patch[id] = el.checked;
+        else if (el.type === 'number') patch[id] = el.value === '' ? null : Number(el.value);
+        else patch[id] = el.value === '' ? null : el.value;
+      });
+      await saveSettings(patch);
+    } catch (e) { toast(e.message,'err'); }
+  });
+}
+
+function render() {
+  const root = document.getElementById('app');
+  if (!state.token) root.innerHTML = renderLogin();
+  else if (!state.guild) root.innerHTML = renderServerSelect();
+  else root.innerHTML = renderDashboard();
+  bind();
+}
+
+async function boot() {
+  await loadOAuthConfig();
+  await handleOAuthCallback();
+  if (state.token) {
+    try {
+      await loadMe();
+      await loadGuilds();
+      if (state.guild) {
+        const still = state.guilds.find(g => g.id === state.guild.id);
+        if (!still) { state.guild = null; localStorage.removeItem(GUILD_KEY); }
+        else { state.guild = still; await loadGuildData(); }
+      } else if (state.guilds.length === 1) {
+        state.guild = state.guilds[0];
+        localStorage.setItem(GUILD_KEY, JSON.stringify(state.guild));
+        await loadGuildData();
+      }
+    } catch (e) {
+      toast(e.message || 'Session error','err');
+      if (e.status === 401) { state.token = null; localStorage.removeItem(TOKEN_KEY); }
+    }
+  }
+  render();
+}
+
+boot();
+</script>
+</body>
+</html>
