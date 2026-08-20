@@ -56,7 +56,7 @@ async function api(path, opts) {
 
 function escapeHtml(s) {
   return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
-    return ({ '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;' })[c];
+    return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c];
   });
 }
 function escapeAttr(s) { return escapeHtml(s); }
@@ -172,29 +172,6 @@ async function resetPersona() {
   toast('Personality reset', 'ok');
   render();
 }
-function fileToDataUrl(file, maxMB) {
-  return new Promise(function (resolve, reject) {
-    if (!file || !String(file.type).startsWith('image/')) return reject(new Error('Please choose an image file'));
-    if (file.size > maxMB * 1024 * 1024) return reject(new Error('Image too large (max ' + maxMB + 'MB)'));
-    const reader = new FileReader();
-    reader.onload = function () { resolve(reader.result); };
-    reader.onerror = function () { reject(new Error('Failed to read file')); };
-    reader.readAsDataURL(file);
-  });
-}
-async function uploadImage(kind, file) {
-  const dataUrl = await fileToDataUrl(file, kind === 'banner' ? 4 : 2);
-  state.persona = await api('/guilds/' + state.guild.id + '/persona/' + kind, {
-    method: 'PUT', body: JSON.stringify({ dataUrl: dataUrl })
-  });
-  toast((kind === 'banner' ? 'Banner' : 'Avatar') + ' updated', 'ok');
-  render();
-}
-async function clearImage(kind) {
-  state.persona = await api('/guilds/' + state.guild.id + '/persona/' + kind, { method: 'DELETE' });
-  toast((kind === 'banner' ? 'Banner' : 'Avatar') + ' removed', 'ok');
-  render();
-}
 async function logout() {
   try { await api('/auth/logout', { method: 'POST', body: '{}' }); } catch (e) {}
   state.token = null; state.user = null; state.guild = null; state.guilds = [];
@@ -253,19 +230,11 @@ function renderOverview() {
   var onlineCls = bot.online ? 'ok' : 'err';
   return '<div class="card"><h2>' + escapeHtml(state.guild.name) + '</h2><p class="help">Server overview and live bot status. Use Refresh after changing settings in Discord.</p><div class="grid2"><div class="stat"><div class="status">Bot status</div><div class="pill ' + onlineCls + '">' + online + '</div></div><div class="stat"><div class="status">Members</div><strong>' + escapeHtml(stats.members != null ? stats.members : '—') + '</strong></div><div class="stat"><div class="status">AI used today</div><strong>' + escapeHtml((stats.aiUsedToday != null ? stats.aiUsedToday : 0) + ' / ' + (stats.aiLimit != null ? stats.aiLimit : 20)) + '</strong></div><div class="stat"><div class="status">Warnings</div><strong>' + escapeHtml(stats.warnings != null ? stats.warnings : 0) + '</strong></div><div class="stat"><div class="status">Active giveaways</div><strong>' + escapeHtml(stats.activeGiveaways != null ? stats.activeGiveaways : 0) + '</strong></div><div class="stat"><div class="status">Reaction-role panels</div><strong>' + escapeHtml(stats.reactionRolePanels != null ? stats.reactionRolePanels : 0) + '</strong></div><div class="stat"><div class="status">Enabled features</div><strong>' + enabled + '</strong></div><div class="stat"><div class="status">Latency</div><strong>' + escapeHtml(bot.latencyMs != null ? bot.latencyMs + ' ms' : '—') + '</strong></div></div></div>';
 }
-function avatarSafe(url) { return String(url).replace(/"/g, ''); }
 function renderPersona(p) {
   p = p || {};
-  var avatarSrc = p.avatarUrl ? (API + p.avatarUrl) : '';
-  var bannerSrc = p.bannerUrl ? (API + p.bannerUrl) : '';
-  return '<div class="card"><h2>Bot Personality</h2><p class="help">Per-server AI personality and nickname. Avatar/banner stored per guild.</p>' +
-    (bannerSrc ? '<img class="banner-prev" src="' + avatarSafe(bannerSrc) + '" alt="Banner"/>' : '<div class="banner-prev"></div>') +
-    '<div class="row" style="margin:1rem 0">' + (avatarSrc ? '<img class="avatar-prev" src="' + avatarSafe(avatarSrc) + '" alt="Avatar"/>' : '<div class="avatar-prev"></div>') +
-    '<div class="field" style="flex:1"><label>Avatar</label><input type="file" id="avatarFile" accept="image/*"/><div class="row"><button class="btn sm" id="btnUploadAvatar">Upload</button><button class="btn ghost sm" id="btnClearAvatar">Remove</button></div></div></div>' +
-    '<div class="field"><label>Banner</label><input type="file" id="bannerFile" accept="image/*"/><div class="row" style="margin-top:.5rem"><button class="btn sm" id="btnUploadBanner">Upload</button><button class="btn ghost sm" id="btnClearBanner">Remove</button></div></div>' +
-    '<div class="grid2"><div class="field"><label>Display name</label><input type="text" id="pDisplayName" maxlength="32" value="' + escapeAttr(p.displayName || '') + '"/></div><div class="field"><label>Server nickname</label><input type="text" id="pNickname" maxlength="32" value="' + escapeAttr(p.nickname || '') + '"/></div></div>' +
-    '<div class="field"><label>Bio</label><textarea id="pBio" maxlength="500">' + escapeHtml(p.bio || '') + '</textarea></div>' +
-    '<div class="field"><label>Personality instructions</label><textarea id="pPersonality" maxlength="2000" style="min-height:140px">' + escapeHtml(p.personality || '') + '</textarea></div>' +
+  return '<div class="card"><h2>Bot Personality</h2><p class="help">Per-server AI personality and server nickname. These affect how OmniBot responds in this Discord server.</p>' +
+    '<div class="field"><label>Server nickname</label><input type="text" id="pNickname" maxlength="32" value="' + escapeAttr(p.nickname || '') + '" placeholder="e.g. Omni"/></div>' +
+    '<div class="field"><label>Personality instructions</label><textarea id="pPersonality" maxlength="2000" style="min-height:140px" placeholder="Describe how OmniBot should behave in this server…">' + escapeHtml(p.personality || '') + '</textarea></div>' +
     '<div class="field"><label>Greeting style</label><input type="text" id="pGreeting" maxlength="300" value="' + escapeAttr(p.greetingStyle || '') + '"/></div>' +
     '<div class="grid2"><div class="field"><label>Tone</label><select id="pTone">' + opt('chill', p.tone) + opt('friendly', p.tone) + opt('professional', p.tone) + opt('funny', p.tone) + '</select></div><div class="field"><label>Emoji usage</label><select id="pEmoji">' + opt('off', p.emojiUsage) + opt('low', p.emojiUsage) + opt('medium', p.emojiUsage) + opt('high', p.emojiUsage) + '</select></div></div>' +
     '<div class="field"><label>GIF usage</label><select id="pGif">' + opt('off', p.gifUsage) + opt('occasional', p.gifUsage) + opt('frequent', p.gifUsage) + '</select></div>' +
@@ -359,9 +328,7 @@ function bind() {
   root.querySelector('#btnSavePersona')?.addEventListener('click', async function () {
     try {
       await savePersona({
-        displayName: document.getElementById('pDisplayName')?.value || '',
         nickname: document.getElementById('pNickname')?.value || '',
-        bio: document.getElementById('pBio')?.value || '',
         personality: document.getElementById('pPersonality')?.value || '',
         greetingStyle: document.getElementById('pGreeting')?.value || '',
         tone: document.getElementById('pTone')?.value || 'chill',
@@ -371,14 +338,6 @@ function bind() {
     } catch (e) { toast(e.message || 'Save failed', 'err'); }
   });
   root.querySelector('#btnResetPersona')?.addEventListener('click', function () { resetPersona().catch(function (e) { toast(e.message, 'err'); }); });
-  root.querySelector('#btnUploadAvatar')?.addEventListener('click', async function () {
-    try { var f = document.getElementById('avatarFile')?.files?.[0]; if (!f) return toast('Choose an image first', 'err'); await uploadImage('avatar', f); } catch (e) { toast(e.message, 'err'); }
-  });
-  root.querySelector('#btnUploadBanner')?.addEventListener('click', async function () {
-    try { var f = document.getElementById('bannerFile')?.files?.[0]; if (!f) return toast('Choose an image first', 'err'); await uploadImage('banner', f); } catch (e) { toast(e.message, 'err'); }
-  });
-  root.querySelector('#btnClearAvatar')?.addEventListener('click', function () { clearImage('avatar').catch(function (e) { toast(e.message, 'err'); }); });
-  root.querySelector('#btnClearBanner')?.addEventListener('click', function () { clearImage('banner').catch(function (e) { toast(e.message, 'err'); }); });
   root.querySelector('#btnSaveGw')?.addEventListener('click', async function () {
     try {
       await api('/guilds/' + state.guild.id + '/features/giveaways/settings', { method: 'PUT', body: JSON.stringify({ enabled: !!document.getElementById('gwEnabled')?.checked }) });
