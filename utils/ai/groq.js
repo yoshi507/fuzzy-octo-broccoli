@@ -8,15 +8,37 @@ const {
 } = require("./aiLimit.js");
 const { buildSystemPrompt, DEFAULT_BASE_PROMPT } = require("../persona/store.js");
 
-const MODEL = process.env.GROQ_MODEL || "llama-3.3-70b-versatile";
+const PRIMARY_MODEL = process.env.GROQ_MODEL || "llama-3.3-70b-versatile";
+const FALLBACK_MODELS = [
+    PRIMARY_MODEL,
+    "llama-3.1-8b-instant",
+    "llama-3.3-70b-versatile",
+    "openai/gpt-oss-20b"
+].filter((v, i, a) => v && a.indexOf(v) === i);
+
+const MODEL = PRIMARY_MODEL;
 
 let groqClient = null;
+let groqClientKeyFingerprint = null;
+
+function resolveGroqApiKey() {
+    const raw =
+        process.env.GROQ_API_KEY ||
+        process.env.GROQ_KEY ||
+        process.env.GROQ_TOKEN ||
+        "";
+    const key = String(raw).trim().replace(/^["']|["']$/g, "");
+    return key || null;
+}
 
 function getGroqClient() {
-    if (groqClient) return groqClient;
-    const key = process.env.GROQ_API_KEY;
+    const key = resolveGroqApiKey();
     if (!key) return null;
+    if (groqClient && groqClientKeyFingerprint === key.slice(0, 8) + ":" + key.length) {
+        return groqClient;
+    }
     groqClient = new Groq({ apiKey: key });
+    groqClientKeyFingerprint = key.slice(0, 8) + ":" + key.length;
     return groqClient;
 }
 
@@ -39,12 +61,46 @@ function globalLimitReachedMessage() {
     return "Sorry — the global AI limit has been reached. Please try again later.";
 }
 
+function extractProviderError(apiError) {
+    const status =
+        apiError?.status ??
+        apiError?.statusCode ??
+        apiError?.response?.status ??
+        null;
+    const body = apiError?.error || apiError?.response?.data?.error || null;
+    const code = body?.code || apiError?.code || null;
+    const type = body?.type || apiError?.type || null;
+    const message = String(
+        body?.message || apiError?.message || apiError || "Unknown provider error"
+    );
+    return { status, code, type, message };
+}
+
 function isProviderRateLimitError(error) {
-    const status = error?.status ?? error?.statusCode ?? error?.response?.status;
-    const msg = String(error?.message || error || "").toLowerCase();
-    if (status === 429) return true;
-    if (/rate limit|quota|tokens per day|tpm|rpm|insufficient_quota/.test(msg)) return true;
+    const info = extractProviderError(error);
+    if (info.status === 429) return true;
+    const msg = info.message.toLowerCase();
+    if (/rate limit|quota|tokens per day|tpm|rpm|insufficient_quota|too many requests/.test(msg)) {
+        return true;
+    }
+    if (info.code === "rate_limit_exceeded") return true;
     return false;
+}
+
+function isAuthError(error) {
+    const info = extractProviderError(error);
+    if (info.status === 401 || info.status === 403) return true;
+    const msg = info.message.toLowerCase();
+    return /invalid api key|incorrect api key|authentication|unauthorized|forbidden/.test(msg);
+}
+
+function isModelError(error) {
+    const info = extractProviderError(error);
+    const msg = info.message.toLowerCase();
+    return (
+        info.code === "model_not_found" ||
+        /model_not_found|does not exist|invalid model|decommissioned|not supported/.test(msg)
+    );
 }
 
 function isGlobalLimitError(error) {
@@ -67,11 +123,17 @@ function formatAiUserError(error) {
     if (error.code === "AI_DAILY_LIMIT") {
         return limitReachedMessage(error.guildId);
     }
-    if (isGlobalLimitError(error)) {
+    if (isGlobalLimitError(error) || error.code === "AI_GLOBAL_LIMIT") {
         return globalLimitReachedMessage();
     }
     if (error.code === "AI_NOT_CONFIGURED") {
-        return "❌ AI is not configured on this bot yet.";
+        return "❌ AI is not configured on this bot yet. An admin needs to set `GROQ_API_KEY`.";
+    }
+    if (error.code === "AI_AUTH_FAILED") {
+        return "❌ AI authentication failed. The Groq API key looks invalid or expired — update `GROQ_API_KEY` on the host.";
+    }
+    if (error.code === "AI_MODEL_FAILED") {
+        return "❌ The configured AI model is unavailable. Try again later or set `GROQ_MODEL` to a supported Groq model.";
     }
     if (error.code === "AI_EMPTY_RESPONSE") {
         return "❌ Omni didn't return a response.";
@@ -98,6 +160,26 @@ async function replyAiError(interaction, error, guildId) {
     }
 }
 
+function sanitizeMessages(messages) {
+    if (!Array.isArray(messages)) return [];
+    return messages
+        .filter((m) => m && typeof m === "object")
+        .map((m) => ({
+            role: m.role === "assistant" || m.role === "system" ? m.role : "user",
+            content: String(m.content ?? "").slice(0, 120000)
+        }))
+        .filter((m) => m.content.trim().length > 0);
+}
+
+async function createCompletion(client, model, messages, options) {
+    return client.chat.completions.create({
+        model,
+        messages,
+        temperature: options.temperature ?? 0.8,
+        max_completion_tokens: options.maxTokens || 1000
+    });
+}
+
 async function askAI(messages, options = {}) {
     const guildId = options.guildId;
 
@@ -108,8 +190,17 @@ async function askAI(messages, options = {}) {
         throw error;
     }
 
-    // Ensure per-server personality is always applied for guild-scoped AI calls
-    let finalMessages = Array.isArray(messages) ? messages.map((m) => ({ ...m })) : [];
+    const key = resolveGroqApiKey();
+    if (!key) {
+        console.error("[AI] GROQ_API_KEY is missing or empty");
+        const error = new Error("GROQ_API_KEY is not configured");
+        error.code = "AI_NOT_CONFIGURED";
+        throw error;
+    }
+
+    let finalMessages = sanitizeMessages(
+        Array.isArray(messages) ? messages.map((m) => ({ ...m })) : []
+    );
     if (guildId && options.applyPersona !== false) {
         const personaPrompt = buildSystemPrompt(guildId, DEFAULT_BASE_PROMPT);
         const marker = "=== SERVER PERSONALITY";
@@ -118,12 +209,21 @@ async function askAI(messages, options = {}) {
             if (!existing.includes(marker)) {
                 finalMessages[0] = {
                     role: "system",
-                    content: personaPrompt + "\n\n" + existing
+                    content: (personaPrompt + "\n\n" + existing).slice(0, 120000)
                 };
             }
         } else {
-            finalMessages = [{ role: "system", content: personaPrompt }, ...finalMessages];
+            finalMessages = [
+                { role: "system", content: String(personaPrompt).slice(0, 120000) },
+                ...finalMessages
+            ];
         }
+    }
+
+    if (!finalMessages.length) {
+        const error = new Error("Empty AI request");
+        error.code = "AI_PROVIDER_ERROR";
+        throw error;
     }
 
     const client = getGroqClient();
@@ -133,38 +233,63 @@ async function askAI(messages, options = {}) {
         throw error;
     }
 
-    let completion;
-    try {
-        completion = await client.chat.completions.create({
-            model: options.model || MODEL,
-            messages: finalMessages,
-            temperature: options.temperature ?? 0.8,
-            max_completion_tokens: options.maxTokens || 1000
-        });
-    } catch (apiError) {
-        const status =
-            apiError?.status ??
-            apiError?.statusCode ??
-            apiError?.response?.status;
-        console.error(
-            "Groq API error:",
-            status || apiError?.message || apiError
-        );
+    const modelsToTry =
+        options.model && !FALLBACK_MODELS.includes(options.model)
+            ? [options.model, ...FALLBACK_MODELS]
+            : FALLBACK_MODELS;
 
-        if (isProviderRateLimitError(apiError)) {
-            const error = new Error("Global AI provider limit reached");
-            error.code = "AI_GLOBAL_LIMIT";
-            error.status = status;
+    let completion = null;
+    let lastError = null;
+
+    for (const model of modelsToTry) {
+        try {
+            completion = await createCompletion(client, model, finalMessages, options);
+            if (model !== PRIMARY_MODEL) {
+                console.warn(`[AI] Primary model failed earlier; succeeded with fallback model=${model}`);
+            }
+            lastError = null;
+            break;
+        } catch (apiError) {
+            lastError = apiError;
+            const info = extractProviderError(apiError);
+            console.error(
+                `[AI] Groq error model=${model} status=${info.status || "n/a"} code=${info.code || "n/a"}: ${info.message}`
+            );
+
+            if (isAuthError(apiError)) {
+                const error = new Error("Groq authentication failed");
+                error.code = "AI_AUTH_FAILED";
+                error.status = info.status;
+                throw error;
+            }
+
+            if (isProviderRateLimitError(apiError)) {
+                const error = new Error("Global AI provider limit reached");
+                error.code = "AI_GLOBAL_LIMIT";
+                error.status = info.status;
+                throw error;
+            }
+
+            if (!isModelError(apiError)) {
+                break;
+            }
+        }
+    }
+
+    if (!completion) {
+        const info = extractProviderError(lastError || {});
+        if (isModelError(lastError)) {
+            const error = new Error("AI model unavailable");
+            error.code = "AI_MODEL_FAILED";
+            error.status = info.status;
             throw error;
         }
-
         const error = new Error("AI provider request failed");
         error.code = "AI_PROVIDER_ERROR";
-        error.status = status;
+        error.status = info.status;
         throw error;
     }
 
-    // Only count successful provider responses against the per-server allowance.
     if (guildId) {
         useAI(guildId);
     }
@@ -222,5 +347,7 @@ module.exports = {
     isGlobalLimitError,
     formatAiUserError,
     replyAiError,
-    MODEL
+    MODEL,
+    PRIMARY_MODEL,
+    FALLBACK_MODELS
 };
