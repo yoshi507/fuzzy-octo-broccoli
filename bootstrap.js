@@ -15,8 +15,6 @@ const { loadCommands } = require("./commandHandler");
 const { handleAppealInteraction } = require("./utils/appeals/interactions.js");
 const fs = require("fs");
 const path = require("path");
-const { loadDatabase } = require("./database/database.js");
-const { isLimitError } = require("./utils/ai/groq.js");
 
 const client = new Client({
     intents: [
@@ -31,9 +29,19 @@ const client = new Client({
 });
 
 client.commands = new Collection();
+
+const eventNameMap = {
+    messageCreate: Events.MessageCreate,
+    guildMemberAdd: Events.GuildMemberAdd,
+    guildMemberRemove: Events.GuildMemberRemove,
+    messageDelete: Events.MessageDelete,
+    interactionCreate: Events.InteractionCreate,
+    clientReady: Events.ClientReady,
+    ready: Events.ClientReady
+};
+
 loadCommands(client);
 
-// Load event files from ./events
 const eventsPath = path.join(__dirname, "events");
 if (fs.existsSync(eventsPath)) {
     const eventFiles = fs.readdirSync(eventsPath).filter((f) => f.endsWith(".js"));
@@ -41,9 +49,10 @@ if (fs.existsSync(eventsPath)) {
     for (const file of eventFiles) {
         try {
             const event = require(path.join(eventsPath, file));
-            if (!event?.name || !event?.execute) continue;
-            if (event.once) client.once(event.name, (...args) => event.execute(...args));
-            else client.on(event.name, (...args) => event.execute(...args));
+            const name = eventNameMap[event.name] || event.name;
+            if (!name || typeof event.execute !== "function") continue;
+            if (event.once) client.once(name, (...args) => event.execute(...args, client));
+            else client.on(name, (...args) => event.execute(...args, client));
             loadedEvents++;
         } catch (err) {
             console.error(`Failed to load event ${file}:`, err?.message || err);
@@ -65,31 +74,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return;
     }
 
-    if (interaction.isButton()) {
-        if (
-            interaction.customId === "suggest_approve" ||
-            interaction.customId === "suggest_reject"
-        ) {
-            if (!interaction.member.permissions.has(PermissionFlagsBits.ManageMessages)) {
-                return interaction.reply({ content: "❌ Missing permission.", ephemeral: true });
-            }
-            const approved = interaction.customId === "suggest_approve";
-            const oldEmbed = interaction.message.embeds[0];
-            if (!oldEmbed) {
-                return interaction.reply({ content: "❌ Missing embed.", ephemeral: true });
-            }
-            const embed = EmbedBuilder.from(oldEmbed).setColor(approved ? 0x3ba55d : 0xed4245).setFooter({
-                text: `${approved ? "Approved" : "Rejected"} by ${interaction.user.tag}`
-            });
-            await interaction.update({ embeds: [embed], components: [] });
-            return;
-        }
-
-        if (interaction.customId === "create_ticket") {
-            // ticket create handled by existing event modules / fallback below
-        }
-    }
-
+    // Ticket + suggestion buttons and slash commands remain handled below / in event files
     if (!interaction.isChatInputCommand()) return;
 
     const command = client.commands.get(interaction.commandName);
