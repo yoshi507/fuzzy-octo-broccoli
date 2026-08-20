@@ -1,27 +1,37 @@
-const { SlashCommandBuilder, ChannelType } = require("discord.js");
+const { SlashCommandBuilder } = require("discord.js");
+
+const { buildSystemPrompt, DEFAULT_BASE_PROMPT } = require("../utils/persona/store.js");
 const {
     askAI,
     limitReachedMessage,
     isLimitError,
     replyAiError,
-    DAILY_LIMIT,
-    getRemaining
+    getRemaining,
+    DAILY_LIMIT
 } = require("../utils/ai/groq.js");
 const { canUseAI } = require("../utils/ai/aiLimit.js");
 
 module.exports = {
     data: new SlashCommandBuilder()
         .setName("aiassistant")
-        .setDescription("Ask Omni about this server or Discord topics")
-        .addStringOption(option =>
+        .setDescription("Ask Omni about this Discord server")
+        .addStringOption((option) =>
             option
                 .setName("question")
-                .setDescription("Your question")
+                .setDescription("What do you want to know?")
                 .setRequired(true)
         ),
 
     async execute(interaction) {
         const question = interaction.options.getString("question");
+
+        if (!interaction.guild) {
+            return interaction.reply({
+                content: "❌ This command only works in a server.",
+                ephemeral: true
+            });
+        }
+
         await interaction.deferReply();
 
         if (!canUseAI(interaction.guild.id)) {
@@ -30,13 +40,8 @@ module.exports = {
 
         try {
             const guild = interaction.guild;
-
-            const textChannels = guild.channels.cache.filter(
-                c => c.type === ChannelType.GuildText
-            ).size;
-            const voiceChannels = guild.channels.cache.filter(
-                c => c.type === ChannelType.GuildVoice
-            ).size;
+            const textChannels = guild.channels.cache.filter((c) => c.isTextBased?.()).size;
+            const voiceChannels = guild.channels.cache.filter((c) => c.isVoiceBased?.()).size;
             const roles = guild.roles.cache.size;
 
             const serverContext = [
@@ -56,7 +61,8 @@ module.exports = {
                     {
                         role: "system",
                         content:
-                            "You are Omni, a Discord server assistant.\n" +
+                            buildSystemPrompt(interaction.guild.id, DEFAULT_BASE_PROMPT) +
+                            "\n\nYou are assisting with this Discord server.\n" +
                             "Use only the provided public server metadata when talking about this server.\n" +
                             "Do NOT invent private data, member lists, message contents, or audit details.\n" +
                             "If the question needs private info you do not have, say so clearly.\n" +
@@ -82,14 +88,17 @@ module.exports = {
             }
 
             const remaining = getRemaining(interaction.guild.id);
-            const text =
-                answer.length > 1900 ? answer.slice(0, 1900) : answer;
+            const text = answer.length > 1900 ? answer.slice(0, 1900) : answer;
 
             await interaction.editReply(
                 `${text}\n\n_AI requests left today: **${remaining}/${DAILY_LIMIT}**_`
             );
         } catch (error) {
-            return replyAiError(interaction, error, interaction.guild?.id);
+            if (isLimitError(error)) {
+                return replyAiError(interaction, error, interaction.guild.id);
+            }
+            console.error("aiassistant error:", error?.code || error?.message || error);
+            return replyAiError(interaction, error, interaction.guild.id);
         }
     }
 };
