@@ -8,6 +8,7 @@ const {
     isLimitError,
     replyAiError
 } = require("../utils/ai/groq.js");
+const { buildGifAwarePayload } = require("../utils/ai/gifReply.js");
 const { canUseAI } = require("../utils/ai/aiLimit.js");
 const { buildSystemPrompt, DEFAULT_BASE_PROMPT } = require("../utils/persona/store.js");
 
@@ -83,19 +84,8 @@ module.exports = {
                 response
             );
 
-            const maxLength = 1900;
-
-            if (response.length <= maxLength) {
-                return interaction.editReply(response);
-            }
-
-            await interaction.editReply(response.slice(0, maxLength));
-
-            for (let i = maxLength; i < response.length; i += maxLength) {
-                await interaction.followUp(
-                    response.slice(i, i + maxLength)
-                );
-            }
+            const payload = await buildGifAwarePayload(response, { maxGifs: 1 });
+            return interaction.editReply(payload);
         } catch (error) {
             return replyAiError(interaction, error, interaction.guild?.id);
         }
