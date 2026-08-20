@@ -10,7 +10,7 @@
   <body>
     <div id="root"></div>
     <script type="module">
-      const n = 8;
+      const n = 16;
       const parts = Array.from({ length: n }, (_, i) => `/assets/parts/p${i}.txt`);
       try {
         const texts = await Promise.all(
@@ -28,7 +28,7 @@
           '<div style="font-family:system-ui;padding:2rem;background:#0f1117;color:#e8eaed;min-height:100vh">' +
           '<h1>Dashboard failed to load</h1><pre>' +
           String(err && err.message ? err.message : err) +
-          '</pre><p>Missing assets under /assets/parts/. Sync the Vite build into public/dashboard.</p></div>';
+          '</pre></div>';
       }
     </script>
   </body>
