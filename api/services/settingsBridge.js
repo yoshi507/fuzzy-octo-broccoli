@@ -96,8 +96,8 @@ function readPath(guildId, storagePath) {
   }
 
   if (root === 'deadChat') {
-    const db = loadDatabase();
-    const dc = db.dashboard?.[guildId]?.deadChat || {};
+    const { resolveDeadChatForGuild } = require('../../utils/configSync.js');
+    const dc = resolveDeadChatForGuild(guildId);
     if (parts[1] === 'enabled') return Boolean(dc.enabled);
     if (parts[1] === 'minutes') return dc.minutes ?? 30;
     if (parts[1] === 'channelId') return dc.channelId || null;
@@ -187,6 +187,8 @@ function writePath(guildId, storagePath, value) {
     if (parts[1] === 'minutes') db.dashboard[guildId].deadChat.minutes = Number(value);
     if (parts[1] === 'channelId') db.dashboard[guildId].deadChat.channelId = value || null;
     saveDatabase(db);
+    const { mirrorDeadChatToChannelStore } = require('../../utils/configSync.js');
+    mirrorDeadChatToChannelStore(guildId, db.dashboard[guildId].deadChat);
     syncDeadChatToBotStore(guildId);
     return;
   }
