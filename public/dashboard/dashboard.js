@@ -255,6 +255,14 @@ function renderAppealFormView() {
   if (form.openAppealId) {
     return '<div class="center"><div class="card login-card"><h2>Open appeal already exists</h2><p class="help">You already have open appeal <code>' + escapeHtml(form.openAppealId) + '</code> on <strong>' + escapeHtml(form.guildName || g.name || 'this server') + '</strong>.</p><div class="row"><button class="btn" id="btnBackAppealList">Back to servers</button><button class="btn ghost" id="btnLogout">Log out</button></div></div></div>';
   }
+  var typeOpts = (form.types && form.types.length ? form.types : [
+    { id: 'ban', label: 'Ban' },
+    { id: 'timeout', label: 'Timeout / Mute' },
+    { id: 'warn', label: 'Warning' }
+  ]).map(function (t) {
+    var selected = String(form.selectedType || form.category || 'ban') === String(t.id) ? ' selected' : '';
+    return '<option value="' + escapeAttr(t.id) + '"' + selected + '>' + escapeHtml(t.label) + '</option>';
+  }).join('');
   var fields = (form.questions || []).map(function (q) {
     return '<div class="field"><label>' + escapeHtml(q.label) + (q.required ? ' *' : '') + '</label>' +
       '<textarea data-appeal-q="' + escapeAttr(q.id) + '" ' + (q.required ? 'required' : '') + ' maxlength="1000" placeholder="Your answer…"></textarea></div>';
@@ -263,8 +271,9 @@ function renderAppealFormView() {
     '<div class="row" style="margin-bottom:1rem">' +
     (icon ? '<img class="avatar-prev" src="' + escapeAttr(icon) + '" alt=""/>' : '<div class="avatar-prev"></div>') +
     '<div><h2 style="margin:0">Appeal — ' + escapeHtml(form.guildName || g.name || 'Server') + '</h2>' +
-    '<p class="status">Type: ' + escapeHtml(form.category || 'ban') + '</p></div></div>' +
-    '<p class="help">Answer the questions below. Your appeal will be sent to this server\'s staff appeals channel.</p>' +
+    '<p class="status">Choose the punishment type, then answer the questions.</p></div></div>' +
+    '<div class="field"><label>Punishment type</label><select id="appealType" required>' + typeOpts + '</select>' +
+    '<p class="help">Accept will unban, clear timeout, or clear warnings depending on this choice.</p></div>' +
     fields +
     '<div class="row"><button class="btn" id="btnSubmitAppeal"' + (state.appealSubmitting ? ' disabled' : '') + '>Submit appeal</button>' +
     '<button class="btn ghost" id="btnBackAppealList">Back</button></div>' +
@@ -308,9 +317,9 @@ function renderOverview() {
 }
 function renderPersona(p) {
   p = p || {};
-  return '<div class="card"><h2>Bot Personality</h2><p class="help">Per-server AI personality and server nickname. These affect how OmniBot responds in this Discord server.</p>' +
+  return '<div class="card"><h2>Bot Personality</h2><p class="help">Per-server AI personality and server nickname.</p>' +
     '<div class="field"><label>Server nickname</label><input type="text" id="pNickname" maxlength="32" value="' + escapeAttr(p.nickname || '') + '" placeholder="e.g. Omni"/></div>' +
-    '<div class="field"><label>Personality instructions</label><textarea id="pPersonality" maxlength="2000" style="min-height:140px" placeholder="Describe how OmniBot should behave in this server…">' + escapeHtml(p.personality || '') + '</textarea></div>' +
+    '<div class="field"><label>Personality instructions</label><textarea id="pPersonality" maxlength="2000" style="min-height:140px">' + escapeHtml(p.personality || '') + '</textarea></div>' +
     '<div class="field"><label>Greeting style</label><input type="text" id="pGreeting" maxlength="300" value="' + escapeAttr(p.greetingStyle || '') + '"/></div>' +
     '<div class="grid2"><div class="field"><label>Tone</label><select id="pTone">' + opt('chill', p.tone) + opt('friendly', p.tone) + opt('professional', p.tone) + opt('funny', p.tone) + '</select></div><div class="field"><label>Emoji usage</label><select id="pEmoji">' + opt('off', p.emojiUsage) + opt('low', p.emojiUsage) + opt('medium', p.emojiUsage) + opt('high', p.emojiUsage) + '</select></div></div>' +
     '<div class="field"><label>GIF usage</label><select id="pGif">' + opt('off', p.gifUsage) + opt('occasional', p.gifUsage) + opt('frequent', p.gifUsage) + '</select></div>' +
@@ -321,7 +330,7 @@ function renderGiveaways() {
   var rows = (data.active || []).map(function (g) {
     return '<tr><td>' + escapeHtml(g.prize || g.id) + '</td><td>' + escapeHtml(g.entries) + '</td><td>' + escapeHtml(g.endsAt ? new Date(g.endsAt).toLocaleString() : '—') + '</td><td>' + escapeHtml(g.status || 'active') + '</td></tr>';
   }).join('') || '<tr><td colspan="4">No active giveaways. Use <code>/giveaway</code> in Discord.</td></tr>';
-  return '<div class="card"><h2>Giveaways</h2><p class="help">Live data from the bot database.</p><div class="switch"><span>Giveaways enabled</span><input type="checkbox" id="gwEnabled"' + ((data.settings && data.settings.enabled !== false) ? ' checked' : '') + '/></div><div class="row"><button class="btn sm" id="btnSaveGw">Save giveaway settings</button></div><table class="table"><thead><tr><th>Prize</th><th>Entries</th><th>Ends</th><th>Status</th></tr></thead><tbody>' + rows + '</tbody></table></div>';
+  return '<div class="card"><h2>Giveaways</h2><div class="switch"><span>Giveaways enabled</span><input type="checkbox" id="gwEnabled"' + ((data.settings && data.settings.enabled !== false) ? ' checked' : '') + '/></div><div class="row"><button class="btn sm" id="btnSaveGw">Save giveaway settings</button></div><table class="table"><thead><tr><th>Prize</th><th>Entries</th><th>Ends</th><th>Status</th></tr></thead><tbody>' + rows + '</tbody></table></div>';
 }
 function renderReactionRoles() {
   var data = state.reactionRoles || { configs: [] };
@@ -337,26 +346,25 @@ function renderSection() {
     case 'chat': return renderToggleGroup('Dead Chat Reviver', [['deadchat.enabled','Enabled']], [['deadchat.channel','Target channel','channel'],['deadchat.minutes','Idle minutes','number']]) + renderToggleGroup('Welcome / Goodbye / Autorole', [['welcome.enabled','Welcome enabled'],['goodbye.enabled','Goodbye enabled'],['autorole.enabled','Autorole enabled']], [['welcome.channel','Welcome channel','channel'],['welcome.message','Welcome message','textarea'],['goodbye.channel','Goodbye channel','channel'],['goodbye.message','Goodbye message','textarea'],['autorole.role','Autorole','role']]) + renderToggleGroup('Anti-spam', [['moderation.antiSpamEnabled','Anti-spam enabled']], []);
     case 'fun': return renderGiveaways() + renderReactionRoles() + renderToggleGroup('Quiz', [['quiz.enabled','Enabled'],['quiz.rewardsEnabled','Rewards'],['quiz.leaderboardEnabled','Leaderboard']], [['quiz.channel','Default channel','channel'],['quiz.questionCount','Questions','number'],['quiz.timeLimitSeconds','Time limit (seconds)','number']]);
     case 'moderation': return renderToggleGroup('Moderation', [['moderation.automodEnabled','AutoMod'],['moderation.antiSpamEnabled','Anti-spam'],['security.enabled','Security / anti-nuke']], [['moderation.blockedWords','Blocked words (comma-separated)','textarea'],['moderation.modLogChannel','Mod log channel','channel'],['security.mode','Security mode','text'],['security.windowSeconds','Anti-nuke window (seconds)','number'],['security.thresholdChannelDelete','Channel delete threshold','number'],['security.thresholdRoleDelete','Role delete threshold','number']]);
-    case 'support': return renderToggleGroup('Appeals', [['appeals.enabled','Appeals enabled'],['appeals.logEnabled','Log appeals']], [['appeals.channel','Appeals channel','channel'],['appeals.cooldownHours','Cooldown (hours)','number'],['appeals.acceptMessage','Accept message','textarea'],['appeals.rejectMessage','Reject message','textarea']]) + '<div class="card"><h2>Tickets</h2><p class="help">Create panels with <code>/ticketsetup</code>.</p><p class="status">Enabled: <strong>' + ((state.tickets && state.tickets.settings && state.tickets.settings.enabled) ? 'Yes' : 'No') + '</strong></p>' + renderToggleGroup('Ticket settings', [['tickets.enabled','Tickets enabled']], [['tickets.panelChannel','Panel channel','channel']]) + '</div>';
+    case 'support': return renderToggleGroup('Appeals', [['appeals.enabled','Appeals enabled'],['appeals.logEnabled','Log appeals']], [['appeals.channel','Appeals channel','channel'],['appeals.cooldownHours','Cooldown (hours)','number'],['appeals.acceptMessage','Accept message','textarea'],['appeals.rejectMessage','Reject message','textarea']]) + '<div class="card"><h2>Tickets</h2><p class="help">Create panels with <code>/ticketsetup</code>.</p>' + renderToggleGroup('Ticket settings', [['tickets.enabled','Tickets enabled']], [['tickets.panelChannel','Panel channel','channel']]) + '</div>';
     case 'server': return renderToggleGroup('Server configuration', [['leveling.enabled','Leveling'],['leveling.announceLevelUp','Announce level-ups'],['music.enabled','Music'],['logging.enabled','Logging']], [['ai.commandPrefix','Command prefix','text'],['leveling.xpMin','XP min','number'],['leveling.xpMax','XP max','number'],['leveling.cooldownSeconds','Leveling cooldown (seconds)','number'],['music.defaultVolume','Default music volume','number'],['logging.channel','Log channel','channel'],['server.suggestionsChannel','Suggestions channel','channel'],['server.announcementRole','Announcement role','role']]);
     case 'analytics': {
       var stats = state.stats || {}, mod = state.modSummary || {};
-      return '<div class="card"><h2>Analytics</h2><p class="help">Real metrics only.</p><div class="grid2"><div class="stat"><div class="status">Members</div><strong>' + escapeHtml(stats.members != null ? stats.members : '—') + '</strong></div><div class="stat"><div class="status">AI today</div><strong>' + escapeHtml((stats.aiUsedToday || 0) + ' / 20') + '</strong></div><div class="stat"><div class="status">Warnings</div><strong>' + escapeHtml(mod.warningCount != null ? mod.warningCount : (stats.warnings || 0)) + '</strong></div><div class="stat"><div class="status">Giveaways</div><strong>' + escapeHtml(stats.activeGiveaways || 0) + '</strong></div><div class="stat"><div class="status">Reaction roles</div><strong>' + escapeHtml(stats.reactionRolePanels || 0) + '</strong></div><div class="stat"><div class="status">Commands today</div><strong><span class="status">Not tracked</span></strong></div></div></div>';
+      return '<div class="card"><h2>Analytics</h2><div class="grid2"><div class="stat"><div class="status">Members</div><strong>' + escapeHtml(stats.members != null ? stats.members : '—') + '</strong></div><div class="stat"><div class="status">AI today</div><strong>' + escapeHtml((stats.aiUsedToday || 0) + ' / 20') + '</strong></div><div class="stat"><div class="status">Warnings</div><strong>' + escapeHtml(mod.warningCount != null ? mod.warningCount : (stats.warnings || 0)) + '</strong></div><div class="stat"><div class="status">Giveaways</div><strong>' + escapeHtml(stats.activeGiveaways || 0) + '</strong></div></div></div>';
     }
     case 'logs': {
       var hist = (state.settingsHistory && state.settingsHistory.history) || [];
       var rows = hist.map(function (h) { return '<tr><td>' + escapeHtml(h.at || '') + '</td><td>' + escapeHtml(h.user || '') + '</td><td>' + escapeHtml((h.keys || []).join(', ')) + '</td></tr>'; }).join('') || '<tr><td colspan="3">No configuration changes yet.</td></tr>';
       return renderToggleGroup('Log channels', [['logging.enabled','Logging enabled']], [['logging.channel','Log channel','channel'],['moderation.modLogChannel','Mod log channel','channel']]) + '<div class="card"><h2>Configuration change log</h2><table class="table"><thead><tr><th>When</th><th>User</th><th>Keys</th></tr></thead><tbody>' + rows + '</tbody></table></div>';
     }
-    case 'security': return renderToggleGroup('Security & anti-nuke', [['security.enabled','Security enabled'],['security.autoTimeoutExecutor','Auto-timeout executor']], [['security.mode','Mode (monitor / alert / lockdown)','text'],['security.windowSeconds','Detection window (seconds)','number'],['security.thresholdChannelDelete','Channel delete threshold','number'],['security.thresholdRoleDelete','Role delete threshold','number'],['security.autoTimeoutMinutes','Timeout duration (minutes)','number']]) + '<div class="card"><h2>Dashboard security</h2><p class="help">Sessions and guild permissions are verified server-side. Secrets are never sent to the browser.</p></div>';
+    case 'security': return renderToggleGroup('Security & anti-nuke', [['security.enabled','Security enabled'],['security.autoTimeoutExecutor','Auto-timeout executor']], [['security.mode','Mode (monitor / alert / lockdown)','text'],['security.windowSeconds','Detection window (seconds)','number'],['security.thresholdChannelDelete','Channel delete threshold','number'],['security.thresholdRoleDelete','Role delete threshold','number'],['security.autoTimeoutMinutes','Timeout duration (minutes)','number']]);
     case 'advanced': {
       var bot = state.bot || {};
-      return '<div class="card"><h2>Advanced</h2><p class="status">Bot online: <strong>' + (bot.online ? 'Yes' : 'No') + '</strong></p><p class="status">Uptime: <strong>' + (bot.uptimeSeconds != null ? Math.floor(bot.uptimeSeconds / 60) + ' min' : '—') + '</strong></p><p class="status">Version: <strong>' + escapeHtml(bot.version || '—') + '</strong></p><p class="status">Guild ID: <code>' + escapeHtml(state.guild.id) + '</code></p><p class="status"><a href="/health" target="_blank">/health</a></p></div>';
+      return '<div class="card"><h2>Advanced</h2><p class="status">Bot online: <strong>' + (bot.online ? 'Yes' : 'No') + '</strong></p><p class="status">Guild ID: <code>' + escapeHtml(state.guild.id) + '</code></p></div>';
     }
     case 'account': {
       var u = state.user || {};
-      var list = (state.guilds || []).map(function (g) { return '<li>' + escapeHtml(g.name) + ' <span class="status">(' + escapeHtml(g.id) + ')</span></li>'; }).join('');
-      return '<div class="card"><h2>Account</h2><p class="status">Discord user: <strong>' + escapeHtml(u.global_name || u.username || '—') + '</strong></p><p class="status">User ID: <code>' + escapeHtml(u.id || '—') + '</code></p><h3 style="margin-top:1rem">Accessible servers</h3><ul>' + list + '</ul><div class="row"><button class="btn ghost" id="btnLogout">Log out</button></div></div>';
+      return '<div class="card"><h2>Account</h2><p class="status">Discord user: <strong>' + escapeHtml(u.global_name || u.username || '—') + '</strong></p><div class="row"><button class="btn ghost" id="btnLogout">Log out</button></div></div>';
     }
     default: return '<div class="card"><h2>' + escapeHtml(state.section) + '</h2></div>';
   }
@@ -408,9 +416,11 @@ function bind() {
       document.querySelectorAll('[data-appeal-q]').forEach(function (ta) {
         answers[ta.getAttribute('data-appeal-q')] = ta.value || '';
       });
+      var typeEl = document.getElementById('appealType');
+      var appealType = (typeEl && typeEl.value) || 'ban';
       var result = await api('/appeals/guilds/' + state.appealForm.guildId + '/submit', {
         method: 'POST',
-        body: JSON.stringify({ answers: answers, type: state.appealForm.category || 'ban' })
+        body: JSON.stringify({ answers: answers, type: appealType })
       });
       toast((result && result.message) || ('Appeal ' + (result && result.id ? result.id : '') + ' submitted'), 'ok');
       state.appealForm = null;
