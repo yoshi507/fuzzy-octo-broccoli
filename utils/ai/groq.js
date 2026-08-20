@@ -31,7 +31,7 @@ function limitReachedMessage(guildId) {
         DAILY_LIMIT +
         " requests)." +
         resetHint +
-        (remaining === 0 ? "" : ` Remaining: ${remaining}.")
+        (remaining === 0 ? "" : ` Remaining: ${remaining}.`)
     );
 }
 
@@ -183,12 +183,13 @@ async function askAI(messages, options = {}) {
 
 async function askOmni(userMessage, context = [], options = {}) {
     const guildId = options.guildId;
-    const systemContent = `${buildSystemPrompt(guildId, DEFAULT_BASE_PROMPT)}
-
-Conversation context:
-${context
-    .map(message => `${message.role}: ${message.content}`)
-    .join("\n")}`;
+    const contextText = (context || [])
+        .map((message) => `${message.role}: ${message.content}`)
+        .join("\n");
+    const systemContent =
+        buildSystemPrompt(guildId, DEFAULT_BASE_PROMPT) +
+        "\n\nConversation context:\n" +
+        contextText;
 
     const messages = [
         {
