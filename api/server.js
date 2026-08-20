@@ -73,37 +73,30 @@ function createApiApp(discordClient) {
     })
   );
 
-  app.use(express.json({ limit: '6mb' }));
+  app.use(express.json({ limit: '2mb' }));
 
-  const generalLimiter = rateLimit({
-    windowMs: 60 * 1000,
-    max: 120,
-    standardHeaders: true,
-    legacyHeaders: false,
-    message: { error: true, code: 'RATE_LIMIT', message: 'Too many requests' }
-  });
-  const authLimiter = rateLimit({
-    windowMs: 60 * 1000,
-    max: 30,
-    standardHeaders: true,
-    legacyHeaders: false,
-    message: { error: true, code: 'RATE_LIMIT', message: 'Too many auth requests' }
-  });
-
-  app.use(generalLimiter);
+  app.use(
+    rateLimit({
+      windowMs: 60 * 1000,
+      max: 120,
+      standardHeaders: true,
+      legacyHeaders: false,
+      message: { error: 'Too many requests', code: 'RATE_LIMIT' }
+    })
+  );
 
   app.get('/health', (req, res) => {
     const client = req.app.locals.discordClient;
     res.json({
       ok: true,
-      botReady: Boolean(client?.readyAt || client?.ws),
-      guilds: client?.guilds?.cache?.size ?? 0,
-      tls: Boolean(loadTlsOptions()),
-      timestamp: new Date().toISOString()
+      service: 'OmniBot API',
+      uptime: process.uptime(),
+      botReady: Boolean(client?.isReady?.() || client?.readyAt),
+      guilds: client?.guilds?.cache?.size ?? null
     });
   });
 
-  app.use('/auth', authLimiter, authRoutes);
+  app.use('/auth', authRoutes);
   app.use('/guilds', guildRoutes);
   app.use('/guilds/:guildId/settings', settingsRoutes);
   app.use('/guilds/:guildId/persona', personaRoutes);
@@ -113,6 +106,23 @@ function createApiApp(discordClient) {
   app.use('/appeals', publicAppealsRoutes);
 
   const dashDir = path.resolve(__dirname, '../public/dashboard');
+
+  function sendDashboardFile(res, fileName) {
+    const filePath = path.join(dashDir, fileName);
+    if (fs.existsSync(filePath)) {
+      return res.sendFile(path.resolve(filePath));
+    }
+    return res.status(404).type('text').send('Not found');
+  }
+
+  // Legal pages — path-based so they work on any host/port
+  app.get(['/tos', '/tos/', '/terms', '/terms/', '/terms-of-service', '/terms-of-service/'], (req, res) => {
+    return sendDashboardFile(res, 'tos.html');
+  });
+  app.get(['/privacy-policy', '/privacy-policy/', '/privacy', '/privacy/'], (req, res) => {
+    return sendDashboardFile(res, 'privacy-policy.html');
+  });
+
   app.get('/', (req, res) => {
     const index = path.join(dashDir, 'index.html');
     if (fs.existsSync(index)) return res.sendFile(path.resolve(index));
