@@ -9,6 +9,7 @@ const {
     replyAiError
 } = require("../utils/ai/groq.js");
 const { canUseAI } = require("../utils/ai/aiLimit.js");
+const { buildSystemPrompt, DEFAULT_BASE_PROMPT } = require("../utils/persona/store.js");
 
 module.exports = {
     data: new SlashCommandBuilder()
@@ -35,7 +36,7 @@ module.exports = {
                 [
                     {
                         role: "system",
-                        content: `You are Omni, a friendly Discord bot.\n\nYour personality:\n- Chill\n- Friendly\n- Funny when appropriate\n- Helpful\n- Natural and conversational\n- Do not sound robotic\n- Keep responses reasonably concise\n- Never pretend to be human\n- Respect Discord rules and server rules\n\nYou are being used inside a Discord server.`
+                        content: buildSystemPrompt(interaction.guild.id, DEFAULT_BASE_PROMPT)
                     },
                     {
                         role: "user",
