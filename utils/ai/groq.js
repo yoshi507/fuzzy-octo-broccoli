@@ -2,172 +2,100 @@ const Groq = require("groq-sdk");
 const {
     canUseAI,
     useAI,
-    DAILY_LIMIT,
     getRemaining,
     getUsage,
-    getResetDescription
+    DAILY_LIMIT
 } = require("./aiLimit.js");
 const { buildSystemPrompt, DEFAULT_BASE_PROMPT } = require("../persona/store.js");
 
-if (!process.env.GROQ_API_KEY) {
-    console.warn("⚠️ GROQ_API_KEY is missing from environment variables");
-}
+const MODEL = process.env.GROQ_MODEL || "llama-3.3-70b-versatile";
 
-const MODEL = "openai/gpt-oss-20b";
-
-/** Lazy Groq client so the bot can start without GROQ_API_KEY (non-AI features still work). */
 let groqClient = null;
 
 function getGroqClient() {
-    if (!process.env.GROQ_API_KEY) {
-        return null;
-    }
-    if (!groqClient) {
-        groqClient = new Groq({
-            apiKey: process.env.GROQ_API_KEY
-        });
-    }
+    if (groqClient) return groqClient;
+    const key = process.env.GROQ_API_KEY;
+    if (!key) return null;
+    groqClient = new Groq({ apiKey: key });
     return groqClient;
 }
 
 function limitReachedMessage(guildId) {
-    const resetText = getResetDescription();
+    const remaining = guildId ? getRemaining(guildId) : 0;
     const usage = guildId ? getUsage(guildId) : null;
-    const usedLine = usage
-        ? `This server has used **${usage.used}/${usage.limit}** AI requests today.\n`
-        : `This server has used all **${DAILY_LIMIT}** AI requests for today.\n`;
-
+    const resetHint = usage?.resetsAt
+        ? ` AI allowance resets <t:${Math.floor(new Date(usage.resetsAt).getTime() / 1000)}:R>.`
+        : " AI allowance resets daily.";
     return (
-        "🚫 **AI limit reached**\n\n" +
-        "You've hit this server's daily AI usage limit, so this command can't run right now.\n\n" +
-        usedLine +
-        `You can use AI commands again **${resetText}** (resets at midnight UTC).\n\n` +
-        "💡 Non-AI features (moderation, music, games, `/translate`, etc.) still work as usual."
+        "⚠️ This server has reached its daily AI limit (" +
+        DAILY_LIMIT +
+        " requests)." +
+        resetHint +
+        (remaining === 0 ? "" : ` Remaining: ${remaining}.")
     );
 }
 
 function globalLimitReachedMessage() {
-    return (
-        "😔 **Sorry — the global AI limit has been reached**\n\n" +
-        "Omni's shared AI service has hit its usage limit for now, so AI replies can't be generated.\n\n" +
-        "This is separate from your server's daily AI allowance. Please try again later.\n\n" +
-        "💡 Non-AI features (moderation, music, games, `/translate`, etc.) still work as usual."
-    );
+    return "Sorry — the global AI limit has been reached. Please try again later.";
 }
 
-function isLimitError(error) {
-    return Boolean(error && error.code === "AI_DAILY_LIMIT");
+function isProviderRateLimitError(error) {
+    const status = error?.status ?? error?.statusCode ?? error?.response?.status;
+    const msg = String(error?.message || error || "").toLowerCase();
+    if (status === 429) return true;
+    if (/rate limit|quota|tokens per day|tpm|rpm|insufficient_quota/.test(msg)) return true;
+    return false;
 }
 
 function isGlobalLimitError(error) {
-    return Boolean(error && error.code === "AI_GLOBAL_LIMIT");
+    if (!error) return false;
+    if (error.code === "AI_GLOBAL_LIMIT") return true;
+    return isProviderRateLimitError(error);
 }
 
-/**
- * Detect Groq / provider rate-limit or quota exhaustion from the SDK error.
- * Does not treat normal server daily limits as global.
- */
-function isProviderRateLimitError(apiError) {
-    if (!apiError) return false;
-
-    const status =
-        apiError.status ??
-        apiError.statusCode ??
-        apiError.response?.status ??
-        apiError.error?.status;
-
-    if (status === 429) return true;
-
-    const pieces = [
-        apiError.message,
-        apiError.code,
-        apiError.type,
-        apiError.error?.message,
-        apiError.error?.code,
-        apiError.error?.type,
-        apiError.body?.error?.message,
-        typeof apiError.error === "string" ? apiError.error : null
-    ]
-        .filter(Boolean)
-        .join(" ")
-        .toLowerCase();
-
-    if (!pieces) {
-        return false;
-    }
-
+function isLimitError(error) {
+    if (!error) return false;
     return (
-        pieces.includes("rate_limit") ||
-        pieces.includes("rate limit") ||
-        pieces.includes("ratelimit") ||
-        pieces.includes("quota") ||
-        pieces.includes("tokens per day") ||
-        pieces.includes("token limit") ||
-        pieces.includes("exceeded your current quota") ||
-        pieces.includes("insufficient_quota") ||
-        pieces.includes("too many requests") ||
-        pieces.includes("daily limit") ||
-        pieces.includes("usage limit")
+        error.code === "AI_DAILY_LIMIT" ||
+        error.code === "AI_GLOBAL_LIMIT" ||
+        isProviderRateLimitError(error)
     );
 }
 
 function formatAiUserError(error) {
-    if (isLimitError(error)) {
+    if (!error) return "❌ Something went wrong with AI.";
+    if (error.code === "AI_DAILY_LIMIT") {
         return limitReachedMessage(error.guildId);
     }
-
     if (isGlobalLimitError(error)) {
         return globalLimitReachedMessage();
     }
-
-    if (error && error.code === "AI_NOT_CONFIGURED") {
-        return (
-            "⚠️ **AI is not available right now**\n\n" +
-            "Omni's AI isn't configured on this bot instance. Please try again later or contact the bot owner."
-        );
+    if (error.code === "AI_NOT_CONFIGURED") {
+        return "❌ AI is not configured on this bot yet.";
     }
-
-    if (error && error.code === "AI_EMPTY_RESPONSE") {
-        return (
-            "😕 **No response from AI**\n\n" +
-            "Omni didn't get a usable reply. Please try again in a moment."
-        );
+    if (error.code === "AI_EMPTY_RESPONSE") {
+        return "❌ Omni didn't return a response.";
     }
-
-    return (
-        "❌ **AI is temporarily unavailable**\n\n" +
-        "Something went wrong while talking to Omni's AI. Please try again in a little while.\n" +
-        "This does **not** use an extra request from your daily limit when the call fails before a reply."
-    );
+    if (error.code === "AI_PROVIDER_ERROR") {
+        return "❌ The AI service is temporarily unavailable. Try again in a moment.";
+    }
+    return "❌ Something went wrong with AI. Please try again.";
 }
 
 async function replyAiError(interaction, error, guildId) {
-    if (isLimitError(error)) {
+    try {
         if (guildId && !error.guildId) {
             error.guildId = guildId;
         }
-        const msg = limitReachedMessage(guildId || error.guildId);
+        const msg = formatAiUserError(error);
         if (interaction.deferred || interaction.replied) {
-            return interaction.editReply(msg);
+            await interaction.editReply(msg);
+        } else {
+            await interaction.reply({ content: msg, ephemeral: true });
         }
-        return interaction.reply({ content: msg, ephemeral: true });
+    } catch (replyErr) {
+        console.error("Failed to send AI error reply:", replyErr?.message || replyErr);
     }
-
-    if (isGlobalLimitError(error)) {
-        const msg = globalLimitReachedMessage();
-        if (interaction.deferred || interaction.replied) {
-            return interaction.editReply(msg);
-        }
-        return interaction.reply({ content: msg, ephemeral: true });
-    }
-
-    console.error("AI command error:", error?.code || error?.message || error);
-
-    const msg = formatAiUserError(error);
-    if (interaction.deferred || interaction.replied) {
-        return interaction.editReply(msg);
-    }
-    return interaction.reply({ content: msg, ephemeral: true });
 }
 
 async function askAI(messages, options = {}) {
@@ -178,6 +106,24 @@ async function askAI(messages, options = {}) {
         error.code = "AI_DAILY_LIMIT";
         error.guildId = guildId;
         throw error;
+    }
+
+    // Ensure per-server personality is always applied for guild-scoped AI calls
+    let finalMessages = Array.isArray(messages) ? messages.map((m) => ({ ...m })) : [];
+    if (guildId && options.applyPersona !== false) {
+        const personaPrompt = buildSystemPrompt(guildId, DEFAULT_BASE_PROMPT);
+        const marker = "=== SERVER PERSONALITY";
+        if (finalMessages.length && finalMessages[0].role === "system") {
+            const existing = String(finalMessages[0].content || "");
+            if (!existing.includes(marker)) {
+                finalMessages[0] = {
+                    role: "system",
+                    content: personaPrompt + "\n\n" + existing
+                };
+            }
+        } else {
+            finalMessages = [{ role: "system", content: personaPrompt }, ...finalMessages];
+        }
     }
 
     const client = getGroqClient();
@@ -191,7 +137,7 @@ async function askAI(messages, options = {}) {
     try {
         completion = await client.chat.completions.create({
             model: options.model || MODEL,
-            messages,
+            messages: finalMessages,
             temperature: options.temperature ?? 0.8,
             max_completion_tokens: options.maxTokens || 1000
         });
