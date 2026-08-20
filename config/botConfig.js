@@ -9,13 +9,14 @@ module.exports = {
     ALLOW_NATURAL_AI: true,
 
     /**
-     * Official OmniBot Dashboard (GitHub Pages).
+     * Official OmniBot Dashboard — same origin as the API (Wispbyte).
+     * Override with DASHBOARD_URL if the public host/port changes.
      */
     DASHBOARD_URL:
         process.env.DASHBOARD_URL ||
-        "https://yoshi507.github.io/Omnibot-dashboard/#/login",
+        "http://78.154.103.20:13893/#/login",
 
     DASHBOARD_ORIGIN:
         process.env.DASHBOARD_ORIGIN ||
-        "https://yoshi507.github.io"
+        "http://78.154.103.20:13893"
 };
