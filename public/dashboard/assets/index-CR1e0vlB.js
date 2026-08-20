@@ -1,1 +1,33 @@
-(function(){console.log('OmniBot dashboard bundle loading...');document.getElementById('root').innerHTML='<div style="font-family:system-ui;padding:2rem;background:#0f1117;color:#e8eaed;min-height:100vh"><h1>OmniBot Dashboard</h1><p>Bundle assets need a full sync. Run scripts/sync-dashboard.sh after cloning Omnibot-dashboard next to this repo, then restart OmniBot.</p><p><a href="/health" style="color:#5865f2">/health</a> should still work.</p></div>';})();
+(async function () {
+  const parts = [
+    '/assets/bundle.gz.b64.0',
+    '/assets/bundle.gz.b64.1',
+    '/assets/bundle.gz.b64.2',
+    '/assets/bundle.gz.b64.3',
+  ];
+  const b64 = (
+    await Promise.all(
+      parts.map(async (p) => {
+        const r = await fetch(p);
+        if (!r.ok) throw new Error('Failed to load ' + p);
+        return r.text();
+      })
+    )
+  ).join('');
+  const bin = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+  const ds = new DecompressionStream('gzip');
+  const stream = new Blob([bin]).stream().pipeThrough(ds);
+  const text = await new Response(stream).text();
+  const blob = new Blob([text], { type: 'text/javascript' });
+  const url = URL.createObjectURL(blob);
+  await import(url);
+})().catch((err) => {
+  console.error(err);
+  const root = document.getElementById('root');
+  if (root) {
+    root.innerHTML =
+      '<div style="font-family:system-ui;padding:2rem;background:#0f1117;color:#e8eaed"><h1>Dashboard failed to load</h1><pre>' +
+      String(err && err.message ? err.message : err) +
+      '</pre></div>';
+  }
+});
