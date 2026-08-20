@@ -16,7 +16,7 @@ module.exports = {
         let url = String(
             process.env.DASHBOARD_URL ||
                 DASHBOARD_URL ||
-                "https://yoshi507.github.io/Omnibot-dashboard/#/login"
+                "http://78.154.103.20:13893/#/login"
         ).trim();
 
         if (interaction.guildId && url.includes("#/")) {
@@ -41,7 +41,10 @@ module.exports = {
             new ButtonBuilder()
                 .setLabel("Open OmniBot Dashboard")
                 .setStyle(ButtonStyle.Link)
-                .setURL("https://yoshi507.github.io/Omnibot-dashboard/#/login")
+                .setURL(
+                    process.env.DASHBOARD_URL ||
+                        "http://78.154.103.20:13893/#/login"
+                )
         );
 
         await interaction.reply({
