@@ -22,6 +22,7 @@ const {
 } = require("./ai/groq.js");
 
 const { canUseAI } = require("./ai/aiLimit.js");
+const { buildSystemPrompt, DEFAULT_BASE_PROMPT } = require("./persona/store.js");
 
 const INVOKE_NAMES = BOT_INVOKE_NAMES.map(n => n.toLowerCase());
 
@@ -29,10 +30,6 @@ function escapeRegex(value) {
     return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-/**
- * Detect prefix commands, or any whole-word mention of omni / omnibot
- * anywhere in the message (case-insensitive).
- */
 function parseInvocation(content) {
     if (!content || typeof content !== "string") {
         return null;
@@ -43,7 +40,6 @@ function parseInvocation(content) {
         return null;
     }
 
-    // Prefix always wins when the message starts with it
     if (PREFIX && trimmed.startsWith(PREFIX)) {
         const rest = trimmed.slice(PREFIX.length).trim();
         if (!rest) {
@@ -52,7 +48,6 @@ function parseInvocation(content) {
         return { mode: "prefix", body: rest, raw: trimmed };
     }
 
-    // Match names anywhere as whole words; longer names first (omnibot before omni)
     const names = [...INVOKE_NAMES].sort((a, b) => b.length - a.length);
     if (names.length === 0) {
         return null;
@@ -73,8 +68,6 @@ function parseInvocation(content) {
         .trim();
     const before = trimmed.slice(0, match.index).trim();
 
-    // Prefer text after the name as the command/AI body.
-    // If nothing follows (e.g. "hey omni"), use text before the name if any.
     let body = after;
     if (!body && before) {
         body = before;
@@ -434,11 +427,13 @@ async function handleNaturalAI(message, prompt) {
             [
                 {
                     role: "system",
-                    content:
-                        "You are Omni, a friendly Discord bot. Answer helpfully and concisely. " +
-                        "If the user is asking how to use a bot command, explain slash commands and that they can also use `" +
-                        PREFIX +
-                        "command` or `omni command`."
+                    content: buildSystemPrompt(
+                        message.guild.id,
+                        DEFAULT_BASE_PROMPT +
+                            " Answer helpfully and concisely. If the user is asking how to use a bot command, explain slash commands and that they can also use `" +
+                            PREFIX +
+                            "command` or `omni command`."
+                    )
                 },
                 {
                     role: "user",
