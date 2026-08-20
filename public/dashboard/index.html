@@ -10,7 +10,7 @@
 Loading dashboard…
 </div>
 <script type="module">
-const n = 3;
+const n = 4;
 try {
   const parts = await Promise.all(
     Array.from({ length: n }, (_, i) =>
@@ -31,7 +31,7 @@ try {
   document.getElementById('boot').innerHTML =
     '<div><h1>Dashboard failed to load</h1><pre>' +
     String(err && err.message ? err.message : err) +
-    '</pre><p>Pull latest OmniBot and hard-refresh.</p></div>';
+    '</pre></div>';
 }
 </script>
 </body>
