@@ -3,6 +3,8 @@ const cors = require('cors');
 const rateLimit = require('express-rate-limit');
 const path = require('path');
 const fs = require('fs');
+const http = require('http');
+const https = require('https');
 const authRoutes = require('./routes/auth');
 const { router: guildRoutes } = require('./routes/guilds');
 const settingsRoutes = require('./routes/settings');
@@ -23,6 +25,31 @@ function parseAllowedOrigins() {
   ];
   const fromEnv = raw.split(',').map((s) => s.trim()).filter(Boolean);
   return [...new Set([...defaults, ...fromEnv])];
+}
+
+/**
+ * Load TLS credentials if both cert and key paths are configured.
+ * Does NOT invent HTTPS — without valid files the server stays plain HTTP.
+ */
+function loadTlsOptions() {
+  const keyPath = process.env.SSL_KEY_PATH || process.env.TLS_KEY_PATH;
+  const certPath = process.env.SSL_CERT_PATH || process.env.TLS_CERT_PATH;
+  if (!keyPath || !certPath) return null;
+  try {
+    if (!fs.existsSync(keyPath) || !fs.existsSync(certPath)) {
+      console.warn(
+        '[API] SSL_KEY_PATH / SSL_CERT_PATH set but file(s) missing — starting HTTP only.'
+      );
+      return null;
+    }
+    return {
+      key: fs.readFileSync(keyPath),
+      cert: fs.readFileSync(certPath)
+    };
+  } catch (err) {
+    console.warn('[API] Failed to load TLS files — starting HTTP only:', err?.message || err);
+    return null;
+  }
 }
 
 function createApiApp(discordClient) {
@@ -76,11 +103,12 @@ function createApiApp(discordClient) {
       ok: true,
       botReady: Boolean(client?.readyAt),
       guilds: client?.guilds?.cache?.size ?? 0,
+      tls: Boolean(req.socket && req.socket.encrypted),
       timestamp: new Date().toISOString()
     });
   });
 
-  app.get('/', (req, res, next) => {
+  app.get('/', (req, res) => {
     const dashDir = path.join(__dirname, '../public/dashboard');
     const index = path.join(dashDir, 'index.html');
     if (fs.existsSync(index)) return res.sendFile(index);
@@ -118,9 +146,20 @@ function startApiServer(discordClient) {
 
   try {
     activeApp = createApiApp(discordClient);
-    activeServer = activeApp.listen(port, '0.0.0.0', () => {
-      console.log(`🌐 OmniBot API listening on 0.0.0.0:${port}`);
-    });
+    const tls = loadTlsOptions();
+
+    if (tls) {
+      activeServer = https.createServer(tls, activeApp);
+      activeServer.listen(port, '0.0.0.0', () => {
+        console.log(`🌐 OmniBot API listening with HTTPS on 0.0.0.0:${port}`);
+      });
+    } else {
+      activeServer = http.createServer(activeApp);
+      activeServer.listen(port, '0.0.0.0', () => {
+        console.log(`🌐 OmniBot API listening on 0.0.0.0:${port} (HTTP — set SSL_KEY_PATH + SSL_CERT_PATH for HTTPS)`);
+      });
+    }
+
     activeServer.on('error', (err) => {
       console.error('❌ API server error:', err?.code || err?.message || err);
     });
@@ -137,4 +176,4 @@ function setDiscordClient(discordClient) {
   if (activeApp) activeApp.locals.discordClient = discordClient;
 }
 
-module.exports = { startApiServer, createApiApp, setDiscordClient };
+module.exports = { startApiServer, createApiApp, setDiscordClient, loadTlsOptions };
