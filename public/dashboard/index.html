@@ -1,15 +1,345 @@
 <!doctype html>
 <html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="description" content="OmniBot Dashboard" />
-    <title>OmniBot Dashboard</title>
-    <script type="module" crossorigin src="/assets/index-CR1e0vlB.js"></script>
-    <link rel="stylesheet" crossorigin href="/assets/index-B75IN09f.css" />
-  </head>
-  <body>
-    <div id="root"></div>
-  </body>
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>OmniBot Dashboard</title>
+  <link rel="icon" href="/favicon.svg" />
+  <style>
+    :root {
+      --bg: #0f1117; --card: #1c212b; --border: #2d3548; --text: #e8eaed;
+      --muted: #9aa3b5; --primary: #5865f2; --primary-h: #4752c4; --ok: #3ba55d; --err: #ed4245;
+      --radius: 12px; --font: Inter, system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; font-family: var(--font); background: var(--bg); color: var(--text); }
+    a { color: var(--primary); }
+    .wrap { max-width: 960px; margin: 0 auto; padding: 1.25rem; }
+    .card { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 1.25rem; margin-bottom: 1rem; }
+    h1 { margin: 0 0 .5rem; font-size: 1.5rem; }
+    h2 { margin: 0 0 .75rem; font-size: 1.1rem; }
+    .muted { color: var(--muted); }
+    .btn { display: inline-flex; align-items: center; justify-content: center; gap: .4rem;
+      border: none; border-radius: 8px; padding: .6rem 1rem; cursor: pointer; font-weight: 600;
+      background: var(--primary); color: #fff; text-decoration: none; }
+    .btn:hover { background: var(--primary-h); }
+    .btn:disabled { opacity: .5; cursor: not-allowed; }
+    .btn-secondary { background: #2a3142; color: var(--text); border: 1px solid var(--border); }
+    .row { display: flex; flex-wrap: wrap; gap: .75rem; align-items: center; }
+    .grid { display: grid; gap: .75rem; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
+    .server { text-align: left; padding: .9rem 1rem; border-radius: var(--radius); border: 1px solid var(--border);
+      background: #161b22; color: var(--text); cursor: pointer; font: inherit; width: 100%; }
+    .server:hover { border-color: var(--primary); }
+    .alert { padding: .75rem 1rem; border-radius: 8px; margin-bottom: 1rem; border: 1px solid var(--border); }
+    .alert-err { border-color: var(--err); background: rgba(237,66,69,.12); }
+    .alert-info { border-color: var(--primary); background: rgba(88,101,242,.12); }
+    label { display: block; font-weight: 600; margin: .75rem 0 .25rem; }
+    input, select, textarea { width: 100%; background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
+      padding: .55rem .7rem; color: var(--text); font: inherit; }
+    textarea { min-height: 80px; }
+    .field { margin-bottom: .5rem; }
+    .top { display: flex; justify-content: space-between; gap: 1rem; flex-wrap: wrap; align-items: center; margin-bottom: 1rem; }
+    .badge { display: inline-block; padding: .15rem .5rem; border-radius: 999px; font-size: .78rem; font-weight: 600;
+      background: rgba(59,165,93,.2); color: var(--ok); }
+    .login-hero { min-height: 100vh; display: grid; place-items: center; padding: 1.5rem;
+      background: radial-gradient(ellipse at top, rgba(88,101,242,.25), transparent 55%), var(--bg); }
+    .login-card { width: min(420px, 100%); text-align: center; }
+    code { font-size: .8rem; word-break: break-all; }
+  </style>
+</head>
+<body>
+  <div id="app"></div>
+  <script type="module">
+    const CLIENT_ID = '1538542627882799155';
+    const SCOPES = 'identify guilds';
+    const STORAGE_SESSION = 'omnibot.session';
+    const STORAGE_GUILD = 'omnibot.selectedGuild';
+
+    const app = document.getElementById('app');
+
+    function loadSession() {
+      try { return JSON.parse(localStorage.getItem(STORAGE_SESSION) || 'null'); } catch { return null; }
+    }
+    function saveSession(s) {
+      if (s) localStorage.setItem(STORAGE_SESSION, JSON.stringify(s));
+      else localStorage.removeItem(STORAGE_SESSION);
+    }
+    function selectedGuildId() { return localStorage.getItem(STORAGE_GUILD) || ''; }
+    function setSelectedGuildId(id) {
+      if (id) localStorage.setItem(STORAGE_GUILD, id);
+      else localStorage.removeItem(STORAGE_GUILD);
+    }
+
+    async function api(path, { method = 'GET', body, session } = {}) {
+      const headers = { Accept: 'application/json' };
+      if (body) headers['Content-Type'] = 'application/json';
+      const s = session || loadSession();
+      if (s?.accessToken) headers.Authorization = 'Bearer ' + s.accessToken;
+      const res = await fetch(path, {
+        method,
+        headers,
+        body: body ? JSON.stringify(body) : undefined,
+      });
+      if (res.status === 401) {
+        saveSession(null);
+        setSelectedGuildId('');
+        throw new Error('Session expired. Please log in again.');
+      }
+      if (!res.ok) {
+        let msg = 'Request failed (' + res.status + ')';
+        try {
+          const data = await res.json();
+          if (data?.message) msg = data.message;
+        } catch {}
+        throw new Error(msg);
+      }
+      if (res.status === 204) return null;
+      return res.json();
+    }
+
+    function oauthRedirectUri() { return window.location.origin + '/'; }
+
+    function loginUrl() {
+      const params = new URLSearchParams({
+        client_id: CLIENT_ID,
+        response_type: 'code',
+        scope: SCOPES,
+        redirect_uri: oauthRedirectUri(),
+      });
+      return 'https://discord.com/api/oauth2/authorize?' + params.toString();
+    }
+
+    function parseCode() {
+      const q = new URLSearchParams(window.location.search);
+      return q.get('code');
+    }
+
+    async function handleOAuthCode(code) {
+      const data = await api('/auth/callback', {
+        method: 'POST',
+        body: { code, redirectUri: oauthRedirectUri() },
+      });
+      const session = {
+        accessToken: data.accessToken || data.token || data.sessionToken,
+        user: data.user,
+        ...data,
+      };
+      if (!session.accessToken) throw new Error('Login response missing token');
+      saveSession(session);
+      window.history.replaceState({}, '', window.location.pathname);
+      return session;
+    }
+
+    function escapeHtml(s) {
+      return String(s)
+        .replace(/&/g, '&')
+        .replace(/</g, '<')
+        .replace(/>/g, '>')
+        .replace(/"/g, '"');
+    }
+
+    function renderLogin(error) {
+      app.innerHTML = `
+        <div class="login-hero">
+          <div class="card login-card">
+            <div style="font-size:2.5rem;margin-bottom:.5rem">🤖</div>
+            <h1>OmniBot Dashboard</h1>
+            <p class="muted">Manage your server on this same host as the API (no mixed content).</p>
+            ${error ? `<div class="alert alert-err">${escapeHtml(error)}</div>` : ''}
+            <a class="btn" style="width:100%;margin-top:.5rem" href="${loginUrl()}">Login with Discord</a>
+            <p class="muted" style="font-size:.8rem;margin-top:1rem">
+              Discord OAuth redirect URI must be:<br><code>${escapeHtml(oauthRedirectUri())}</code>
+            </p>
+            <p class="muted" style="font-size:.75rem;margin-top:.75rem">
+              <a href="/health" target="_blank" rel="noopener">API health</a>
+            </p>
+          </div>
+        </div>`;
+    }
+
+    async function renderApp() {
+      const session = loadSession();
+      if (!session?.accessToken) {
+        renderLogin();
+        return;
+      }
+
+      let health = null;
+      let guilds = [];
+      let error = null;
+      try {
+        health = await api('/health');
+        guilds = await api('/guilds', { session });
+        if (!Array.isArray(guilds)) guilds = guilds?.guilds || [];
+      } catch (e) {
+        error = e.message || String(e);
+      }
+
+      let guildId = selectedGuildId();
+      if (guildId && !guilds.some((g) => g.id === guildId)) {
+        guildId = '';
+        setSelectedGuildId('');
+      }
+      if (!guildId && guilds.length === 1) {
+        guildId = guilds[0].id;
+        setSelectedGuildId(guildId);
+      }
+
+      if (!guildId) {
+        app.innerHTML = `
+          <div class="wrap">
+            <div class="top">
+              <div>
+                <h1>Select a server</h1>
+                <p class="muted">Only servers you can manage with OmniBot are listed.</p>
+              </div>
+              <button class="btn btn-secondary" id="logout">Log out</button>
+            </div>
+            ${error ? `<div class="alert alert-err">${escapeHtml(error)}</div>` : ''}
+            ${health ? `<div class="alert alert-info">Bot ${health.botReady ? '<span class="badge">online</span>' : 'offline'} · ${health.guilds ?? '—'} guilds</div>` : ''}
+            ${!error && guilds.length === 0 ? `<div class="alert alert-err">No manageable servers found. Invite OmniBot and ensure you have Manage Server.</div>` : ''}
+            <div class="grid" id="guilds"></div>
+          </div>`;
+        document.getElementById('logout')?.addEventListener('click', () => { saveSession(null); location.reload(); });
+        const grid = document.getElementById('guilds');
+        for (const g of guilds) {
+          const btn = document.createElement('button');
+          btn.className = 'server';
+          btn.type = 'button';
+          btn.innerHTML = `<strong>${escapeHtml(g.name || g.id)}</strong><div class="muted" style="font-size:.8rem">${escapeHtml(g.id)}</div>`;
+          btn.addEventListener('click', () => { setSelectedGuildId(g.id); renderApp(); });
+          grid.appendChild(btn);
+        }
+        return;
+      }
+
+      let settings = {};
+      let settingsError = null;
+      try {
+        settings = await api('/guilds/' + guildId + '/settings', { session });
+        if (settings?.settings) settings = settings.settings;
+      } catch (e) {
+        settingsError = e.message || String(e);
+      }
+
+      const guild = guilds.find((g) => g.id === guildId) || { id: guildId, name: guildId };
+      const keys = Object.keys(settings || {}).sort();
+      const fields = keys.slice(0, 40);
+
+      app.innerHTML = `
+        <div class="wrap">
+          <div class="top">
+            <div>
+              <h1>${escapeHtml(guild.name || 'Server')}</h1>
+              <p class="muted">OmniBot configuration · same-origin API</p>
+            </div>
+            <div class="row">
+              <button class="btn btn-secondary" id="switch">Switch server</button>
+              <button class="btn btn-secondary" id="logout">Log out</button>
+            </div>
+          </div>
+          ${health ? `<div class="alert alert-info">Bot ${health.botReady ? '<span class="badge">online</span>' : 'offline'}</div>` : ''}
+          ${settingsError ? `<div class="alert alert-err">${escapeHtml(settingsError)}</div>` : ''}
+          <div class="card">
+            <h2>Settings</h2>
+            <p class="muted">Changes save to OmniBot via the API.</p>
+            <form id="settingsForm"></form>
+            <div class="row" style="margin-top:1rem">
+              <button class="btn" type="submit" form="settingsForm" id="saveBtn">Save changes</button>
+              <span class="muted" id="saveStatus"></span>
+            </div>
+          </div>
+        </div>`;
+
+      const form = document.getElementById('settingsForm');
+      for (const key of fields) {
+        const val = settings[key];
+        const div = document.createElement('div');
+        div.className = 'field';
+        const label = document.createElement('label');
+        label.textContent = key;
+        div.appendChild(label);
+        if (typeof val === 'boolean') {
+          const sel = document.createElement('select');
+          sel.name = key;
+          sel.innerHTML = `<option value="true" ${val ? 'selected' : ''}>true</option><option value="false" ${!val ? 'selected' : ''}>false</option>`;
+          div.appendChild(sel);
+        } else if (typeof val === 'number') {
+          const input = document.createElement('input');
+          input.type = 'number';
+          input.name = key;
+          input.value = String(val);
+          div.appendChild(input);
+        } else if (val === null || typeof val === 'string') {
+          const input = document.createElement('input');
+          input.type = 'text';
+          input.name = key;
+          input.value = val == null ? '' : String(val);
+          div.appendChild(input);
+        } else {
+          const ta = document.createElement('textarea');
+          ta.name = key;
+          ta.value = JSON.stringify(val);
+          div.appendChild(ta);
+        }
+        form.appendChild(div);
+      }
+      if (!fields.length && !settingsError) {
+        form.innerHTML = '<p class="muted">No settings returned for this server yet.</p>';
+      }
+
+      document.getElementById('logout')?.addEventListener('click', () => { saveSession(null); setSelectedGuildId(''); location.reload(); });
+      document.getElementById('switch')?.addEventListener('click', () => { setSelectedGuildId(''); renderApp(); });
+
+      form?.addEventListener('submit', async (ev) => {
+        ev.preventDefault();
+        const status = document.getElementById('saveStatus');
+        const btn = document.getElementById('saveBtn');
+        btn.disabled = true;
+        status.textContent = 'Saving…';
+        try {
+          const patch = {};
+          const fd = new FormData(form);
+          for (const [k, v] of fd.entries()) {
+            const prev = settings[k];
+            if (typeof prev === 'boolean') patch[k] = v === 'true';
+            else if (typeof prev === 'number') patch[k] = Number(v);
+            else if (prev !== null && typeof prev === 'object') {
+              try { patch[k] = JSON.parse(String(v)); } catch { patch[k] = v; }
+            } else patch[k] = v === '' ? null : v;
+          }
+          await api('/guilds/' + guildId + '/settings', {
+            method: 'PUT',
+            session,
+            body: { settings: patch },
+          });
+          status.textContent = 'Saved.';
+          status.style.color = 'var(--ok)';
+        } catch (e) {
+          status.textContent = e.message || 'Save failed';
+          status.style.color = 'var(--err)';
+        } finally {
+          btn.disabled = false;
+        }
+      });
+    }
+
+    async function main() {
+      const code = parseCode();
+      if (code) {
+        app.innerHTML = `<div class="login-hero"><div class="card login-card"><h1>Signing you in…</h1><p class="muted">Please wait.</p></div></div>`;
+        try {
+          await handleOAuthCode(code);
+          await renderApp();
+        } catch (e) {
+          renderLogin(e.message || String(e));
+        }
+        return;
+      }
+      await renderApp();
+    }
+
+    main();
+  </script>
+</body>
 </html>
