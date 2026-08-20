@@ -8,8 +8,16 @@ const {
 } = require("../utils/textCommands.js");
 
 const {
-    loadDatabase
+    loadDatabase,
+    saveDatabase
 } = require("../database/database.js");
+
+const {
+    addXP,
+    handleLevelUpRole
+} = require("../utils/leveling.js");
+
+const { sendModLog } = require("../utils/modLog.js");
 
 module.exports = {
     name: "messageCreate",
@@ -19,10 +27,10 @@ module.exports = {
             return;
         }
 
-        // Prefix / natural Omni invocation (non-AI + AI)
+        let wasInvocation = false;
         try {
-            const handled = await handleTextInvocation(message);
-            if (handled) return;
+            wasInvocation = await handleTextInvocation(message);
+            if (wasInvocation) return;
         } catch (error) {
             console.error(
                 "Text invocation error:",
@@ -30,7 +38,6 @@ module.exports = {
             );
         }
 
-        // Auto-translate (non-AI)
         try {
             const database = loadDatabase();
             const translationSettings =
@@ -116,7 +123,6 @@ module.exports = {
             }
         }
 
-        // Anti-spam (uses spamConfig.enabled when present)
         if (!database.spam) {
             database.spam = {};
         }
@@ -125,40 +131,96 @@ module.exports = {
             database.spam[message.guild.id] = {};
         }
 
-        const spamEnabled = database.spamConfig?.[message.guild.id]?.enabled !== false;
-        if (!spamEnabled) {
+        const spamEnabled =
+            database.spamConfig?.[message.guild.id]?.enabled !== false;
+
+        if (spamEnabled) {
+            const guildSpam = database.spam[message.guild.id];
+            const userId = message.author.id;
+            const now = Date.now();
+
+            if (!guildSpam[userId]) {
+                guildSpam[userId] = {
+                    messages: [],
+                    warned: false
+                };
+            }
+
+            const userData = guildSpam[userId];
+            userData.messages = userData.messages.filter(
+                timestamp => now - timestamp < 5000
+            );
+            userData.messages.push(now);
+
+            if (userData.messages.length >= 5) {
+                try {
+                    await message.delete();
+                } catch (error) {
+                    console.error("Anti-spam delete error:", error);
+                }
+
+                if (!userData.warned) {
+                    userData.warned = true;
+
+                    if (
+                        message.member &&
+                        message.member.moderatable
+                    ) {
+                        try {
+                            await message.member.timeout(
+                                10 * 1000,
+                                "Automatic anti-spam protection"
+                            );
+
+                            await sendModLog(message.guild, {
+                                action: "Timeout",
+                                user: message.author,
+                                moderator: message.client.user,
+                                reason: "Automatic anti-spam protection"
+                            });
+                        } catch (error) {
+                            console.error("Anti-spam timeout error:", error);
+                        }
+                    }
+
+                    try {
+                        const warning = await message.channel.send({
+                            content: `⚠️ ${message.author}, please stop spamming.`
+                        });
+
+                        setTimeout(() => {
+                            warning.delete().catch(() => {});
+                        }, 5000);
+                    } catch (error) {
+                        console.error("Anti-spam warning error:", error);
+                    }
+                }
+
+                return;
+            }
+        }
+
+        const settings = database.levelSettings?.[message.guild.id];
+
+        if (settings?.enabled === false) {
             return;
         }
 
-        const guildSpam = database.spam[message.guild.id];
-        const userId = message.author.id;
-        const now = Date.now();
+        try {
+            const result = await addXP(
+                message.guild.id,
+                message.author.id
+            );
 
-        if (!guildSpam[userId]) {
-            guildSpam[userId] = {
-                messages: [],
-                warned: false
-            };
-        }
-
-        const userSpam = guildSpam[userId];
-        userSpam.messages = (userSpam.messages || []).filter(
-            (ts) => now - ts < 7000
-        );
-        userSpam.messages.push(now);
-
-        if (userSpam.messages.length >= 6) {
-            try {
-                if (message.member?.moderatable) {
-                    await message.member.timeout(60 * 1000, "Anti-spam");
-                }
+            if (result && result.levelledUp) {
                 await message.channel.send(
-                    `⏳ ${message.author} slowed down for spam.`
-                ).then((m) => setTimeout(() => m.delete().catch(() => {}), 5000));
-            } catch (error) {
-                console.error("Anti-spam error:", error?.message || error);
+                    `🎉 ${message.author} reached **Level ${result.level}**!`
+                );
+
+                await handleLevelUpRole(message.member, result.level);
             }
-            userSpam.messages = [];
+        } catch (error) {
+            console.error("Leveling error:", error?.message || error);
         }
     }
 };
