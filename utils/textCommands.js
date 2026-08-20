@@ -23,6 +23,8 @@ const {
 
 const { canUseAI } = require("./ai/aiLimit.js");
 const { buildSystemPrompt, DEFAULT_BASE_PROMPT } = require("./persona/store.js");
+const { collectInvokeNames } = require("./invokeNames.js");
+const { buildGifAwarePayload } = require("./ai/gifReply.js");
 
 const INVOKE_NAMES = BOT_INVOKE_NAMES.map(n => n.toLowerCase());
 
@@ -30,7 +32,7 @@ function escapeRegex(value) {
     return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-function parseInvocation(content) {
+function parseInvocation(content, invokeNames = INVOKE_NAMES) {
     if (!content || typeof content !== "string") {
         return null;
     }
@@ -48,7 +50,7 @@ function parseInvocation(content) {
         return { mode: "prefix", body: rest, raw: trimmed };
     }
 
-    const names = [...INVOKE_NAMES].sort((a, b) => b.length - a.length);
+    const names = [...(invokeNames || INVOKE_NAMES)].sort((a, b) => b.length - a.length);
     if (names.length === 0) {
         return null;
     }
@@ -447,9 +449,8 @@ async function handleNaturalAI(message, prompt) {
             }
         );
 
-        const body =
-            answer.length > 1900 ? answer.slice(0, 1900) + "…" : answer;
-        await message.reply(body);
+        const payload = await buildGifAwarePayload(answer, { maxGifs: 1 });
+        await message.reply(payload);
     } catch (error) {
         if (isLimitError(error)) {
             await message.reply(limitReachedMessage(message.guild.id));
@@ -473,18 +474,27 @@ async function handleTextInvocation(message) {
         return false;
     }
 
-    const invocation = parseInvocation(content);
+    const invokeNames = collectInvokeNames(message);
+    const invocation = parseInvocation(content, invokeNames);
     if (!invocation) {
         return false;
     }
 
     const body = invocation.body.trim();
+    const callName =
+        (invocation.matchedName && String(invocation.matchedName)) ||
+        (invokeNames && invokeNames[0]) ||
+        "omni";
 
     if (!body) {
         await message.reply(
             "👋 I'm here! Use `" +
                 PREFIX +
-                "help` or `omni help`, or ask me a question like `omni how do warnings work?`."
+                "help` or `" +
+                callName +
+                " help`, or ask me a question like `" +
+                callName +
+                " how do warnings work?`."
         );
         return true;
     }
