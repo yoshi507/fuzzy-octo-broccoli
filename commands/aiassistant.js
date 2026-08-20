@@ -10,6 +10,7 @@ const {
     DAILY_LIMIT
 } = require("../utils/ai/groq.js");
 const { canUseAI } = require("../utils/ai/aiLimit.js");
+const { buildGifAwarePayload } = require("../utils/ai/gifReply.js");
 
 module.exports = {
     data: new SlashCommandBuilder()
@@ -88,11 +89,14 @@ module.exports = {
             }
 
             const remaining = getRemaining(interaction.guild.id);
-            const text = answer.length > 1900 ? answer.slice(0, 1900) : answer;
-
-            await interaction.editReply(
-                `${text}\n\n_AI requests left today: **${remaining}/${DAILY_LIMIT}**_`
-            );
+            const payload = await buildGifAwarePayload(answer, { maxGifs: 1 });
+            const suffix = `\n\n_AI requests left today: **${remaining}/${DAILY_LIMIT}**_`;
+            if (payload.content) {
+                payload.content = (payload.content + suffix).slice(0, 2000);
+            } else {
+                payload.content = suffix.trim();
+            }
+            await interaction.editReply(payload);
         } catch (error) {
             if (isLimitError(error)) {
                 return replyAiError(interaction, error, interaction.guild.id);
