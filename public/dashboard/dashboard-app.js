@@ -1,15 +1,17 @@
 function renderLogin() {
-  // Never show stale OAuth errors once a session exists
   var err = (!state.token && state.oauthError)
     ? '<p class="help" style="color:var(--err);white-space:pre-wrap;margin-bottom:1rem">' + escapeHtml(state.oauthError) + '</p>'
     : '';
+  var cfg = state.oauth && state.oauth.configured === false
+    ? '<p class="help" style="color:var(--warn)">Discord login is not fully configured on the server yet.</p>'
+    : '';
   return '<div class="center"><div class="card login-card"><div style="text-align:center;margin-bottom:1rem"><div class="login-logo"><img src="/logo.svg" alt="OmniBot"/></div><div style="font-size:1.25rem;font-weight:700">OmniBot</div></div>' +
-    err +
+    err + cfg +
     '<p class="help">Manage your server, add OmniBot, appeal a punishment, or discover communities.</p>' +
-    '<button class="btn" id="btnOpenDashboard" style="width:100%;margin-bottom:.75rem">Open Dashboard</button>' +
-    '<a class="btn ghost" style="display:block;margin-bottom:.75rem" href="' + INVITE + '" target="_blank" rel="noopener">Add to Discord</a>' +
-    '<button class="btn ghost" id="btnAppealPunishment" style="width:100%;margin-bottom:.75rem">Appeal a punishment</button>' +
-    '<button class="btn ghost" id="btnAdvertise" style="width:100%">Advertise</button>' +
+    '<button type="button" class="btn" id="btnOpenDashboard" style="width:100%;margin-bottom:.75rem" onclick="startLogin(\'dashboard\')">Open Dashboard</button>' +
+    '<a class="btn ghost" style="display:block;margin-bottom:.75rem;text-align:center" href="' + INVITE + '" target="_blank" rel="noopener">Add to Discord</a>' +
+    '<button type="button" class="btn ghost" id="btnAppealPunishment" style="width:100%;margin-bottom:.75rem" onclick="startLogin(\'appeals\')">Appeal a punishment</button>' +
+    '<button type="button" class="btn ghost" id="btnAdvertise" style="width:100%">Advertise</button>' +
     '<p class="status" style="margin-top:1rem">API: same-origin · <a href="/health" target="_blank">/health</a></p>' +
     '<p class="status" style="margin-top:.75rem"><a href="/tos">Terms of Service</a> · <a href="/privacy-policy">Privacy Policy</a></p></div></div>';
 }
@@ -130,16 +132,27 @@ function bind() {
   var root = document.getElementById('app');
   if (!root) return;
 
-  root.querySelector('#btnOpenDashboard')?.addEventListener('click', function () { startLogin('dashboard'); });
-  root.querySelector('#btnAppealPunishment')?.addEventListener('click', function () { startLogin('appeals'); });
-  root.querySelector('#btnBackHome')?.addEventListener('click', function () {
+  function on(sel, evt, fn) {
+    var el = root.querySelector(sel);
+    if (el) el.addEventListener(evt, fn);
+  }
+
+  on('#btnOpenDashboard', 'click', function (e) {
+    e.preventDefault();
+    startLogin('dashboard');
+  });
+  on('#btnAppealPunishment', 'click', function (e) {
+    e.preventDefault();
+    startLogin('appeals');
+  });
+  on('#btnBackHome', 'click', function () {
     state.mode = 'dashboard';
     localStorage.setItem(INTENT_KEY, 'dashboard');
     state.appealForm = null;
     state.appealGuild = null;
     render();
   });
-  root.querySelector('#btnBackAppealList')?.addEventListener('click', function () {
+  on('#btnBackAppealList', 'click', function () {
     state.appealForm = null;
     state.appealGuild = null;
     render();
@@ -170,7 +183,7 @@ function bind() {
     });
   });
 
-  root.querySelector('#btnSubmitAppeal')?.addEventListener('click', async function () {
+  on('#btnSubmitAppeal', 'click', async function () {
     if (!state.appealForm || state.appealSubmitting) return;
     var answers = {};
     root.querySelectorAll('[data-appeal-q]').forEach(function (ta) {
@@ -216,12 +229,12 @@ function bind() {
     });
   });
 
-  root.querySelector('#btnChangeServer')?.addEventListener('click', function () {
+  on('#btnChangeServer', 'click', function () {
     state.guild = null;
     localStorage.removeItem(GUILD_KEY);
     render();
   });
-  root.querySelector('#btnRefresh')?.addEventListener('click', function () { refreshGuildData(false); });
+  on('#btnRefresh', 'click', function () { refreshGuildData(false); });
 
   root.querySelectorAll('[data-section]').forEach(function (btn) {
     btn.addEventListener('click', function () {
@@ -248,17 +261,19 @@ function bind() {
     });
   });
 
-  root.querySelector('#btnSavePersona')?.addEventListener('click', async function () {
+  on('#btnSavePersona', 'click', async function () {
     try {
+      var pEl = document.getElementById('pPersonality');
+      var tEl = document.getElementById('pTone');
       await savePersona({
-        personality: document.getElementById('pPersonality')?.value || '',
-        tone: document.getElementById('pTone')?.value || 'chill'
+        personality: pEl ? pEl.value : '',
+        tone: tEl ? tEl.value : 'chill'
       });
     } catch (e) {
       toast(e.message || 'Save failed', 'err');
     }
   });
-  root.querySelector('#btnResetPersona')?.addEventListener('click', function () {
+  on('#btnResetPersona', 'click', function () {
     resetPersona().catch(function (e) { toast(e.message, 'err'); });
   });
 }
