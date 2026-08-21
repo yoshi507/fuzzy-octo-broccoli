@@ -86,33 +86,39 @@ module.exports = {
             const database = loadDatabase();
             const automod = database.automod?.[message.guild.id];
 
-            if (automod?.enabled && Array.isArray(automod.blockedWords)) {
-                const content = message.content.toLowerCase();
-                const hit = automod.blockedWords.find((w) =>
-                    w && content.includes(String(w).toLowerCase())
-                );
+            // Omni in-chat filter (backup when Discord AutoMod is off or missed a match)
+            if (automod?.enabled) {
+                let words = automod.blockedWords;
+                if (typeof words === "string") {
+                    words = words.split(/[\n,]+/).map((s) => s.trim()).filter(Boolean);
+                }
+                if (Array.isArray(words) && words.length) {
+                    const content = message.content.toLowerCase();
+                    const hit = words.find(
+                        (w) => w && content.includes(String(w).toLowerCase())
+                    );
+                    if (hit) {
+                        await message.delete().catch(() => {});
+                        await message.channel
+                            .send({
+                                content: `${message.author}, that message was removed by OmniBot AutoMod.`,
+                                allowedMentions: { users: [message.author.id] }
+                            })
+                            .then((m) => {
+                                setTimeout(() => m.delete().catch(() => {}), 5000);
+                            })
+                            .catch(() => {});
 
-                if (hit) {
-                    await message.delete().catch(() => {});
-                    await message.channel
-                        .send({
-                            content: `${message.author}, that message was removed by AutoMod.`,
-                            allowedMentions: { users: [message.author.id] }
-                        })
-                        .then((m) => {
-                            setTimeout(() => m.delete().catch(() => {}), 5000);
-                        })
-                        .catch(() => {});
+                        await sendModLog(message.guild, {
+                            title: "OmniBot AutoMod",
+                            description: `Blocked word in ${message.channel}`,
+                            userId: message.author.id,
+                            moderatorId: message.client.user.id,
+                            reason: `Matched: ${hit}`
+                        }).catch(() => {});
 
-                    await sendModLog(message.guild, {
-                        title: "AutoMod",
-                        description: `Blocked word in ${message.channel}`,
-                        userId: message.author.id,
-                        moderatorId: message.client.user.id,
-                        reason: `Matched: ${hit}`
-                    }).catch(() => {});
-
-                    return;
+                        return;
+                    }
                 }
             }
         } catch (error) {
