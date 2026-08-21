@@ -67,6 +67,7 @@ function createSession({
   };
   save(data);
   return {
+    token: token,
     accessToken: token,
     expiresAt,
     user: data[token].user
