@@ -12,15 +12,40 @@ function getOAuthCredentials() {
   return { clientId, clientSecret };
 }
 
-async function exchangeCode(code, redirectUri) {
-  const { clientId, clientSecret } = getOAuthCredentials();
-  if (!code || !redirectUri) {
-    const err = new Error('code and redirectUri are required');
-    err.status = 400;
-    err.code = 'VALIDATION';
-    throw err;
+/**
+ * Preferred public redirect URI for Discord OAuth.
+ * Server-side callback avoids browser double-exchange bugs.
+ */
+function getPreferredRedirectUri(req) {
+  const envRaw = process.env.DISCORD_REDIRECT_URI || process.env.OAUTH_REDIRECT_URI || '';
+  const env = String(envRaw).trim();
+
+  // Always prefer the server-side callback path on the same origin.
+  // If env is a root URL (legacy), upgrade it to /auth/discord/callback.
+  if (env) {
+    try {
+      const u = new URL(env);
+      if (u.pathname.replace(/\/$/, '') === '/auth/discord/callback') {
+        return `${u.origin}/auth/discord/callback`;
+      }
+      // Legacy root redirects → server callback
+      if (u.pathname === '/' || u.pathname === '') {
+        return `${u.origin}/auth/discord/callback`;
+      }
+      // Custom path kept as-is
+      return env;
+    } catch {
+      return env;
+    }
   }
 
+  const host = req?.get?.('x-forwarded-host') || req?.get?.('host');
+  const proto = (req?.get?.('x-forwarded-proto') || req?.protocol || 'https').split(',')[0].trim();
+  if (host) return `${proto}://${host}/auth/discord/callback`;
+  return null;
+}
+
+async function exchangeCodeOnce(code, redirectUri, clientId, clientSecret) {
   const body = new URLSearchParams({
     client_id: clientId,
     client_secret: clientSecret,
@@ -36,20 +61,54 @@ async function exchangeCode(code, redirectUri) {
   });
 
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    console.error('[OAuth] token exchange failed:', res.status, data?.error || data?.message || '');
-    const err = new Error(data.error_description || data.error || 'OAuth token exchange failed');
-    err.status = 401;
-    err.code = 'OAUTH_FAILED';
+  return { res, data };
+}
+
+async function exchangeCode(code, redirectUri) {
+  const { clientId, clientSecret } = getOAuthCredentials();
+  if (!code || !redirectUri) {
+    const err = new Error('code and redirectUri are required');
+    err.status = 400;
+    err.code = 'VALIDATION';
     throw err;
   }
 
-  const scopes = String(data.scope || '').split(/\s+/).filter(Boolean);
-  if (!scopes.includes('guilds')) {
-    console.warn('[OAuth] token is missing guilds scope. scopes=', scopes.join(' '));
+  const primary = String(redirectUri).trim();
+  const { res, data } = await exchangeCodeOnce(code, primary, clientId, clientSecret);
+
+  if (res.ok) {
+    const scopes = String(data.scope || '').split(/\s+/).filter(Boolean);
+    if (!scopes.includes('guilds')) {
+      console.warn('[OAuth] token is missing guilds scope. scopes=', scopes.join(' '));
+    }
+    return data;
   }
 
-  return data;
+  console.error(
+    '[OAuth] token exchange failed:',
+    res.status,
+    data?.error || data?.message || '',
+    'redirect_uri=',
+    primary
+  );
+
+  let msg = data.error_description || data.error || 'OAuth token exchange failed';
+  if (data.error === 'invalid_grant' || /invalid.?code/i.test(String(msg))) {
+    msg =
+      'Login code expired or already used. Close extra tabs, then click Open Dashboard once and do not refresh during login.';
+  } else if (data.error === 'invalid_request' || /redirect/i.test(String(msg))) {
+    msg =
+      'Discord rejected the redirect URL. In the Discord Developer Portal → OAuth2 → Redirects, add exactly: ' +
+      primary;
+  } else if (data.error === 'invalid_client') {
+    msg =
+      'Discord rejected the app credentials (client id/secret). Check DISCORD_CLIENT_ID and DISCORD_CLIENT_SECRET on the server.';
+  }
+
+  const err = new Error(msg);
+  err.status = 401;
+  err.code = data.error || 'OAUTH_FAILED';
+  throw err;
 }
 
 async function refreshAccessToken(refreshToken) {
@@ -79,7 +138,7 @@ async function refreshAccessToken(refreshToken) {
     console.error('[OAuth] refresh failed:', res.status, data?.error || '');
     const err = new Error('Discord session expired. Please log in again.');
     err.status = 401;
-    err.code = 'OAUTH_REFRESH_FAILED';
+    err.code = 'OAUTH_FAILED';
     throw err;
   }
   return data;
@@ -90,23 +149,15 @@ async function fetchUser(accessToken) {
     headers: { Authorization: `Bearer ${accessToken}` }
   });
   if (!res.ok) {
-    console.error('[OAuth] fetchUser failed:', res.status);
-    const err = new Error('Failed to fetch Discord user');
-    err.status = 401;
-    err.code = 'OAUTH_FAILED';
+    const err = new Error('Failed to fetch Discord user profile');
+    err.status = 502;
+    err.code = 'DISCORD_USER_FAILED';
     throw err;
   }
   return res.json();
 }
 
 async function fetchUserGuilds(accessToken) {
-  if (!accessToken) {
-    const err = new Error('Missing Discord access token in session. Please log out and log in again.');
-    err.status = 401;
-    err.code = 'OAUTH_FAILED';
-    throw err;
-  }
-
   const res = await fetch(`${DISCORD_API}/users/@me/guilds`, {
     headers: { Authorization: `Bearer ${accessToken}` }
   });
@@ -166,5 +217,6 @@ module.exports = {
   fetchUser,
   fetchUserGuilds,
   canManageGuild,
+  getPreferredRedirectUri,
   DISCORD_API
 };
