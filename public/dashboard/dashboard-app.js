@@ -1,5 +1,6 @@
 function renderLogin() {
-  var err = state.oauthError
+  // Never show stale OAuth errors once a session exists
+  var err = (!state.token && state.oauthError)
     ? '<p class="help" style="color:var(--err);white-space:pre-wrap;margin-bottom:1rem">' + escapeHtml(state.oauthError) + '</p>'
     : '';
   return '<div class="center"><div class="card login-card"><div style="text-align:center;margin-bottom:1rem"><div class="login-logo"><img src="/logo.svg" alt="OmniBot"/></div><div style="font-size:1.25rem;font-weight:700">OmniBot</div></div>' +
@@ -293,6 +294,11 @@ async function boot() {
     if (state.token) {
       try {
         await loadMe();
+        state.oauthError = null;
+        try {
+          var t = document.getElementById('toast');
+          if (t) t.classList.add('hidden');
+        } catch (e) {}
         var intent = localStorage.getItem(INTENT_KEY) || 'dashboard';
         state.mode = intent === 'appeals' ? 'appeals' : (intent === 'advertise' ? 'advertise' : 'dashboard');
         if (state.mode === 'appeals') {
@@ -315,7 +321,12 @@ async function boot() {
           }
         }
       } catch (e) {
-        toast(e.message || 'Session error', 'err');
+        var msg = e.message || 'Session error';
+        if (state.token && /invalid_request|invalid.?code|invalid_grant/i.test(msg)) {
+          state.oauthError = null;
+        } else {
+          toast(msg, 'err');
+        }
         if (e.status === 401) {
           state.token = null;
           localStorage.removeItem(TOKEN_KEY);
