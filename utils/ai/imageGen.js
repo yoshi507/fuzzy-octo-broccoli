@@ -1,14 +1,22 @@
 /**
- * Pollinations image generation (Flux only).
- * Uses the shared per-server AI daily limit.
+ * Pollinations image generation (Flux only) — resource-safe for low-RAM hosts.
+ * Uses the shared per-server AI daily limit + global generation queue.
  */
 
 const { canUseAI, useAI, getRemaining, DAILY_LIMIT } = require("./aiLimit.js");
 const { limitReachedMessage } = require("./groq.js");
+const {
+    enqueueGeneration,
+    QUEUE_WAIT_MESSAGE
+} = require("./generationQueue.js");
 
 const MODEL = "flux";
-const DEFAULT_WIDTH = 1024;
-const DEFAULT_HEIGHT = 1024;
+/** Discord-friendly default — keeps RAM and bandwidth low on Wispbyte. */
+const DEFAULT_WIDTH = 512;
+const DEFAULT_HEIGHT = 512;
+const MAX_DIM = 512;
+const FETCH_TIMEOUT_MS = 45000;
+const MAX_IMAGE_BYTES = 4 * 1024 * 1024; // 4 MB hard cap
 
 function resolveApiKey() {
     const raw =
@@ -19,13 +27,15 @@ function resolveApiKey() {
     return String(raw).trim().replace(/^["']|["']$/g, "") || null;
 }
 
-/**
- * Build Pollinations image URL for Flux.
- */
+function clampDim(n, fallback) {
+    const v = Number(n) || fallback;
+    return Math.min(MAX_DIM, Math.max(256, Math.floor(v)));
+}
+
 function buildImageUrl(prompt, opts = {}) {
     const encoded = encodeURIComponent(String(prompt).trim().slice(0, 500));
-    const width = Math.min(1280, Math.max(256, Number(opts.width) || DEFAULT_WIDTH));
-    const height = Math.min(1280, Math.max(256, Number(opts.height) || DEFAULT_HEIGHT));
+    const width = clampDim(opts.width, DEFAULT_WIDTH);
+    const height = clampDim(opts.height, DEFAULT_HEIGHT);
     const params = new URLSearchParams({
         model: MODEL,
         width: String(width),
@@ -39,9 +49,48 @@ function buildImageUrl(prompt, opts = {}) {
     return `https://gen.pollinations.ai/image/${encoded}?${params.toString()}`;
 }
 
-/**
- * Fetch image bytes from Pollinations (Flux only).
- */
+async function readResponseLimited(res, maxBytes) {
+    if (!res.body || typeof res.body.getReader !== "function") {
+        const ab = await res.arrayBuffer();
+        if (ab.byteLength > maxBytes) {
+            const err = new Error("Image response too large");
+            err.code = "IMAGE_TOO_LARGE";
+            throw err;
+        }
+        return Buffer.from(ab);
+    }
+
+    const reader = res.body.getReader();
+    const chunks = [];
+    let total = 0;
+    try {
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            if (!value || !value.length) continue;
+            total += value.length;
+            if (total > maxBytes) {
+                try {
+                    await reader.cancel();
+                } catch {
+                    /* ignore */
+                }
+                const err = new Error("Image response too large");
+                err.code = "IMAGE_TOO_LARGE";
+                throw err;
+            }
+            chunks.push(Buffer.from(value));
+        }
+    } finally {
+        try {
+            reader.releaseLock();
+        } catch {
+            /* ignore */
+        }
+    }
+    return Buffer.concat(chunks, total);
+}
+
 async function fetchFluxImage(prompt, opts = {}) {
     const key = resolveApiKey();
     if (!key) {
@@ -56,14 +105,28 @@ async function fetchFluxImage(prompt, opts = {}) {
         Accept: "image/*"
     };
 
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+
     let res;
     try {
-        res = await fetch(url, { headers, redirect: "follow" });
+        res = await fetch(url, {
+            headers,
+            redirect: "follow",
+            signal: controller.signal
+        });
     } catch (e) {
+        if (e?.name === "AbortError") {
+            const err = new Error("Image request timed out");
+            err.code = "IMAGE_TIMEOUT";
+            throw err;
+        }
         const err = new Error("Image provider request failed");
         err.code = "IMAGE_PROVIDER_ERROR";
         err.cause = e;
         throw err;
+    } finally {
+        clearTimeout(timer);
     }
 
     if (!res.ok) {
@@ -98,9 +161,10 @@ async function fetchFluxImage(prompt, opts = {}) {
         throw err;
     }
 
-    const contentType = res.headers.get("content-type") || "image/jpeg";
-    const ab = await res.arrayBuffer();
-    const buffer = Buffer.from(ab);
+    const contentType = (res.headers.get("content-type") || "image/jpeg").split(
+        ";"
+    )[0];
+    const buffer = await readResponseLimited(res, MAX_IMAGE_BYTES);
     if (!buffer.length) {
         const err = new Error("Empty image response");
         err.code = "IMAGE_EMPTY";
@@ -109,9 +173,6 @@ async function fetchFluxImage(prompt, opts = {}) {
     return { buffer, contentType };
 }
 
-/**
- * Generate a Flux image for a guild, consuming one AI request on success.
- */
 async function generateGuildImage(guildId, prompt, opts = {}) {
     const cleaned = String(prompt || "").trim();
     if (!cleaned) {
@@ -127,13 +188,32 @@ async function generateGuildImage(guildId, prompt, opts = {}) {
         throw err;
     }
 
-    const result = await fetchFluxImage(cleaned, opts);
+    const onQueued = opts.onQueued;
 
-    if (guildId) {
-        useAI(guildId);
-    }
+    return enqueueGeneration(
+        async () => {
+            if (guildId && !canUseAI(guildId)) {
+                const err = new Error("AI daily limit reached");
+                err.code = "AI_DAILY_LIMIT";
+                err.guildId = guildId;
+                throw err;
+            }
 
-    return result;
+            const result = await fetchFluxImage(cleaned, {
+                width: clampDim(opts.width, DEFAULT_WIDTH),
+                height: clampDim(opts.height, DEFAULT_HEIGHT),
+                seed: opts.seed
+            });
+
+            if (guildId) {
+                useAI(guildId);
+            }
+
+            return result;
+        },
+        "image",
+        { onQueued }
+    );
 }
 
 function formatImageUserError(error) {
@@ -156,6 +236,12 @@ function formatImageUserError(error) {
     if (error.code === "IMAGE_EMPTY") {
         return "❌ The image service returned an empty result. Try a different prompt.";
     }
+    if (error.code === "IMAGE_TIMEOUT") {
+        return "❌ Image generation timed out. Please try again.";
+    }
+    if (error.code === "IMAGE_TOO_LARGE") {
+        return "❌ The image was too large to process. Try a simpler prompt.";
+    }
     return "❌ Image generation failed. Please try again.";
 }
 
@@ -166,5 +252,8 @@ module.exports = {
     formatImageUserError,
     resolveApiKey,
     getRemaining,
-    DAILY_LIMIT
+    DAILY_LIMIT,
+    DEFAULT_WIDTH,
+    DEFAULT_HEIGHT,
+    QUEUE_WAIT_MESSAGE
 };
