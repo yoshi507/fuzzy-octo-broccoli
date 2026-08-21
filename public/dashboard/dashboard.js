@@ -108,18 +108,13 @@ function clearAuthQueryFromUrl() {
 }
 
 async function loadOAuthConfig() {
-  try {
-    state.oauth = await api('/auth/config');
-  } catch (e) {
-    state.oauth = null;
-  }
+  try { state.oauth = await api('/auth/config'); }
+  catch (e) { state.oauth = null; }
 }
 
 function startLogin(intent) {
   intent = intent || 'dashboard';
-  if (intent !== 'appeals' && intent !== 'advertise' && intent !== 'dashboard') {
-    intent = 'dashboard';
-  }
+  if (intent !== 'appeals' && intent !== 'advertise' && intent !== 'dashboard') intent = 'dashboard';
   try { localStorage.setItem(INTENT_KEY, intent); } catch (e) {}
   state.mode = intent;
   state.oauthError = null;
@@ -132,9 +127,8 @@ function startLogin(intent) {
   } catch (e) {}
 
   if (state.token) {
-    if (typeof goToIntent === 'function') {
-      goToIntent(intent);
-    } else {
+    if (typeof goToIntent === 'function') goToIntent(intent);
+    else {
       state.mode = intent;
       if (typeof render === 'function') render();
     }
@@ -143,7 +137,6 @@ function startLogin(intent) {
 
   var clientId = (state.oauth && state.oauth.clientId) || '1538542627882799155';
   var redir = redirectUri();
-
   var url =
     'https://discord.com/api/oauth2/authorize' +
     '?client_id=' + encodeURIComponent(clientId) +
@@ -152,14 +145,12 @@ function startLogin(intent) {
     '&scope=' + encodeURIComponent('identify guilds') +
     '&prompt=consent' +
     '&state=' + encodeURIComponent(intent);
-
   window.location.assign(url);
 }
 try { window.startLogin = startLogin; } catch (e) {}
 
 async function handleOAuthCallback() {
   var params = new URLSearchParams(window.location.search);
-
   var loginToken = params.get('login_token');
   if (loginToken) {
     state.token = loginToken;
@@ -188,17 +179,14 @@ async function handleOAuthCallback() {
     try { existing = localStorage.getItem(TOKEN_KEY); } catch (e) {}
     if (existing) { state.token = existing; state.oauthError = null; return; }
     if (/already used|invalid.?code|invalid_grant/i.test(loginError)) {
-      state.oauthError = 'Login almost completed but was interrupted. Please click Open Dashboard once more.';
-    } else {
-      state.oauthError = loginError;
-    }
+      state.oauthError = 'Login almost completed but was interrupted. Please try once more.';
+    } else state.oauthError = loginError;
     return;
   }
 
   var err = params.get('error');
-  var errDesc = params.get('error_description');
   if (err) {
-    if (!state.token) state.oauthError = errDesc || err || 'Discord login failed.';
+    if (!state.token) state.oauthError = params.get('error_description') || err;
     clearAuthQueryFromUrl();
     return;
   }
@@ -207,7 +195,6 @@ async function handleOAuthCallback() {
   if (!code) return;
   clearAuthQueryFromUrl();
   if (state.token) { state.oauthError = null; return; }
-
   try {
     var data = await api('/auth/callback', {
       method: 'POST',
@@ -219,9 +206,7 @@ async function handleOAuthCallback() {
       try { localStorage.setItem(TOKEN_KEY, tok); } catch (e) {}
       state.oauthError = null;
       hideToast();
-    } else {
-      state.oauthError = 'Login succeeded but no session token was returned.';
-    }
+    } else state.oauthError = 'Login succeeded but no session token was returned.';
   } catch (e) {
     state.oauthError = (e && e.message) || 'Login failed';
   }
@@ -233,7 +218,6 @@ async function goToIntent(intent) {
     if (h === '#/appeals') intent = 'appeals';
     else if (h === '#/advertise') intent = 'advertise';
   } catch (e) {}
-
   intent = intent || localStorage.getItem(INTENT_KEY) || 'dashboard';
   if (intent !== 'appeals' && intent !== 'advertise' && intent !== 'dashboard') intent = 'dashboard';
   state.mode = intent;
@@ -242,32 +226,23 @@ async function goToIntent(intent) {
     if (intent === 'appeals') location.hash = '#/appeals';
     else if (intent === 'advertise') location.hash = '#/advertise';
   } catch (e) {}
-
   try {
-    if (intent === 'appeals') {
-      await loadAppealDirectory();
-    } else if (intent === 'advertise') {
+    if (intent === 'appeals') await loadAppealDirectory();
+    else if (intent === 'advertise') {
       if (typeof loadAdvertiseDirectory === 'function') await loadAdvertiseDirectory();
     } else {
       await loadGuilds();
       if (state.guild) {
         var still = state.guilds.find(function (g) { return String(g.id) === String(state.guild.id); });
-        if (!still) {
-          state.guild = null;
-          try { localStorage.removeItem(GUILD_KEY); } catch (e) {}
-        } else {
-          state.guild = still;
-          await loadGuildData();
-        }
+        if (!still) { state.guild = null; try { localStorage.removeItem(GUILD_KEY); } catch (e) {} }
+        else { state.guild = still; await loadGuildData(); }
       } else if (state.guilds.length === 1) {
         state.guild = state.guilds[0];
         try { localStorage.setItem(GUILD_KEY, JSON.stringify(state.guild)); } catch (e) {}
         await loadGuildData();
       }
     }
-  } catch (e) {
-    toast(e.message || 'Failed to load', 'err');
-  }
+  } catch (e) { toast(e.message || 'Failed to load', 'err'); }
   if (typeof render === 'function') render();
 }
 
@@ -361,38 +336,31 @@ async function saveSettings(patch) {
   state.settings = await api('/guilds/' + id + '/settings');
   toast('Settings saved', 'ok');
   var panel = document.getElementById('main-panel');
-  if (panel && state.mode === 'dashboard') {
-    panel.innerHTML = renderSection();
-    if (typeof bindPanelControls === 'function') bindPanelControls();
-  } else {
-    render();
-  }
+  if (panel && state.mode === 'dashboard' && typeof renderSection === 'function') {
+    try {
+      panel.innerHTML = renderSection();
+      if (typeof bindPanelControls === 'function') bindPanelControls();
+    } catch (e) { render(); }
+  } else render();
 }
 async function savePersona(body) {
   const id = state.guild.id;
   state.persona = await api('/guilds/' + id + '/persona', { method: 'PUT', body: JSON.stringify(body) });
   toast('Personality saved', 'ok');
-  var panel = document.getElementById('main-panel');
-  if (panel) {
-    panel.innerHTML = renderSection();
-    if (typeof bindPanelControls === 'function') bindPanelControls();
-  } else render();
+  if (typeof switchSection === 'function') switchSection(state.section || 'ai');
+  else render();
 }
 async function resetPersona() {
   state.persona = await api('/guilds/' + state.guild.id + '/persona/reset', { method: 'POST', body: '{}' });
   toast('Personality reset', 'ok');
-  var panel = document.getElementById('main-panel');
-  if (panel) {
-    panel.innerHTML = renderSection();
-    if (typeof bindPanelControls === 'function') bindPanelControls();
-  } else render();
+  if (typeof switchSection === 'function') switchSection(state.section || 'ai');
+  else render();
 }
 async function logout() {
   try { await api('/auth/logout', { method: 'POST', body: '{}' }); } catch (e) {}
   state.token = null; state.user = null; state.guild = null; state.guilds = [];
   state.appealForm = null; state.appealGuild = null; state.appealDirectory = [];
-  state.mode = 'dashboard';
-  state.oauthError = null;
+  state.mode = 'dashboard'; state.oauthError = null;
   localStorage.removeItem(TOKEN_KEY); localStorage.removeItem(GUILD_KEY); localStorage.removeItem(INTENT_KEY);
   try { location.hash = ''; } catch (e) {}
   render();
@@ -406,7 +374,9 @@ function channelOptions(selected) {
   return html;
 }
 function navBtn(id, label) {
-  return '<button type="button" data-section="' + escapeAttr(id) + '" class="' + (state.section === id ? 'active' : '') + '">' + escapeHtml(label) + '</button>';
+  return '<button type="button" data-section="' + escapeAttr(id) + '" class="' + (state.section === id ? 'active' : '') +
+    '" onclick="window.__omniSwitchSection && window.__omniSwitchSection(\'' + escapeAttr(id) + '\')">' +
+    escapeHtml(label) + '</button>';
 }
 function renderOverview() {
   var enabled = 0;
