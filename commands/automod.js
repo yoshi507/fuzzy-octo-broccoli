@@ -54,6 +54,13 @@ function saveAutomod(guildId, node) {
     }
 }
 
+function assertManageGuild(interaction) {
+    const perms = interaction.memberPermissions || interaction.member?.permissions;
+    if (perms?.has?.(PermissionFlagsBits.Administrator)) return true;
+    if (perms?.has?.(PermissionFlagsBits.ManageGuild)) return true;
+    return false;
+}
+
 async function applyDiscordSync(interaction, node) {
     const result = await syncDiscordAutoMod(interaction.guild, {
         enabled: node.enabled && node.useDiscordAutoMod !== false,
@@ -140,6 +147,13 @@ module.exports = {
         if (!interaction.guild) {
             return interaction.reply({
                 content: "❌ Server only.",
+                ephemeral: true
+            });
+        }
+
+        if (!assertManageGuild(interaction)) {
+            return interaction.reply({
+                content: "❌ You need the **Manage Server** permission to change AutoMod settings.",
                 ephemeral: true
             });
         }
