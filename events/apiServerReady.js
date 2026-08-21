@@ -8,6 +8,8 @@ module.exports = {
     once: true,
 
     execute(readyClient) {
+        try { global.__omnibotClient = readyClient; } catch (_) {}
+
         try {
             const { startApiServer, setDiscordClient } = require("../api/server.js");
             setDiscordClient(readyClient);
