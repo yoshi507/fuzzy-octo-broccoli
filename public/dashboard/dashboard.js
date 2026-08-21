@@ -117,10 +117,24 @@ async function loadOAuthConfig() {
 
 function startLogin(intent) {
   intent = intent || 'dashboard';
+  if (intent !== 'appeals' && intent !== 'advertise' && intent !== 'dashboard') {
+    intent = 'dashboard';
+  }
   try { localStorage.setItem(INTENT_KEY, intent); } catch (e) {}
   state.mode = intent;
   state.oauthError = null;
   hideToast();
+
+  // Already logged in — go straight to the intended mode (no extra OAuth)
+  if (state.token) {
+    if (typeof goToIntent === 'function') {
+      goToIntent(intent);
+    } else {
+      state.mode = intent;
+      if (typeof render === 'function') render();
+    }
+    return;
+  }
 
   var clientId = (state.oauth && state.oauth.clientId) || '1538542627882799155';
   var redir = redirectUri();
@@ -131,7 +145,8 @@ function startLogin(intent) {
     '&response_type=code' +
     '&redirect_uri=' + encodeURIComponent(redir) +
     '&scope=' + encodeURIComponent('identify guilds') +
-    '&prompt=consent';
+    '&prompt=consent' +
+    '&state=' + encodeURIComponent(intent);
 
   window.location.assign(url);
 }
@@ -146,6 +161,11 @@ async function handleOAuthCallback() {
     try { localStorage.setItem(TOKEN_KEY, loginToken); } catch (e) {}
     state.oauthError = null;
     hideToast();
+    var intentParam = params.get('intent');
+    if (intentParam === 'appeals' || intentParam === 'advertise' || intentParam === 'dashboard') {
+      state.mode = intentParam;
+      try { localStorage.setItem(INTENT_KEY, intentParam); } catch (e) {}
+    }
     clearAuthQueryFromUrl();
     return;
   }
@@ -206,6 +226,43 @@ async function handleOAuthCallback() {
   } catch (e) {
     state.oauthError = (e && e.message) || 'Login failed';
   }
+}
+
+/** Navigate to a post-login intent (appeals / advertise / dashboard). */
+async function goToIntent(intent) {
+  intent = intent || localStorage.getItem(INTENT_KEY) || 'dashboard';
+  if (intent !== 'appeals' && intent !== 'advertise' && intent !== 'dashboard') intent = 'dashboard';
+  state.mode = intent;
+  try { localStorage.setItem(INTENT_KEY, intent); } catch (e) {}
+
+  try {
+    if (intent === 'appeals') {
+      await loadAppealDirectory();
+    } else if (intent === 'advertise') {
+      if (typeof loadAdvertiseDirectory === 'function') {
+        await loadAdvertiseDirectory();
+      }
+    } else {
+      await loadGuilds();
+      if (state.guild) {
+        var still = state.guilds.find(function (g) { return String(g.id) === String(state.guild.id); });
+        if (!still) {
+          state.guild = null;
+          try { localStorage.removeItem(GUILD_KEY); } catch (e) {}
+        } else {
+          state.guild = still;
+          await loadGuildData();
+        }
+      } else if (state.guilds.length === 1) {
+        state.guild = state.guilds[0];
+        try { localStorage.setItem(GUILD_KEY, JSON.stringify(state.guild)); } catch (e) {}
+        await loadGuildData();
+      }
+    }
+  } catch (e) {
+    toast(e.message || 'Failed to load', 'err');
+  }
+  if (typeof render === 'function') render();
 }
 
 async function loadMe() { state.user = await api('/auth/me'); }
