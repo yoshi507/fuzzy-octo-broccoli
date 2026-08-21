@@ -13,8 +13,7 @@ function readAiUsage(guildId) {
     const data = JSON.parse(fs.readFileSync(limitFile, 'utf8'));
     const today = new Date().toISOString().slice(0, 10);
     const entry = data[guildId];
-    const settings = getGuildSettings(guildId);
-    const limit = settings['ai.dailyLimit'] ?? 20;
+    const limit = 20;
     if (!entry || entry.date !== today) return { used: 0, limit };
     return { used: entry.count || 0, limit };
   } catch {
@@ -22,17 +21,43 @@ function readAiUsage(guildId) {
   }
 }
 
+function isBotOnline(client) {
+  if (!client) return false;
+  if (typeof client.isReady === 'function') {
+    try {
+      return Boolean(client.isReady());
+    } catch {
+      /* fall through */
+    }
+  }
+  return Boolean(client.readyAt);
+}
+
 const botRouter = express.Router({ mergeParams: true });
 
 botRouter.get('/', requireAuth, async (req, res, next) => {
   try {
     await assertCanManage(req, req.params.guildId);
-    const client = req.app.locals.discordClient;
+    const client =
+      req.app.locals.discordClient ||
+      global.__omnibotClient ||
+      null;
+    const online = isBotOnline(client);
+    const guildInCache = online
+      ? Boolean(client.guilds?.cache?.get(String(req.params.guildId)))
+      : false;
+
     res.json({
-      online: Boolean(client?.readyAt || client?.ws),
+      online,
+      inGuild: guildInCache,
       guildId: req.params.guildId,
-      latencyMs: typeof client?.ws?.ping === 'number' ? client.ws.ping : null,
-      uptimeSeconds: client?.uptime != null ? Math.floor(client.uptime / 1000) : null,
+      latencyMs:
+        typeof client?.ws?.ping === 'number' && Number.isFinite(client.ws.ping)
+          ? Math.round(client.ws.ping)
+          : null,
+      uptimeSeconds:
+        client?.uptime != null ? Math.floor(client.uptime / 1000) : null,
+      tag: client?.user?.tag || null,
       version: require('../../package.json').version || '1.0.0'
     });
   } catch (err) {
@@ -62,7 +87,7 @@ statsRouter.get('/', requireAuth, async (req, res, next) => {
     } catch {}
     res.json({
       guildId: req.params.guildId,
-      members: botGuild.memberCount,
+      members: botGuild?.memberCount ?? null,
       commandsToday: null,
       aiUsedToday: ai.used,
       aiLimit: ai.limit,
