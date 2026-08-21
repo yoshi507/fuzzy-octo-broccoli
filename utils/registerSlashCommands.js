@@ -1,7 +1,7 @@
 /**
  * Register all slash commands with Discord.
- * Prefer global registration so every guild sees /imagine and other commands.
- * Set SLASH_COMMANDS_GUILD_ID to deploy to a single guild (faster for testing).
+ * ALWAYS registers GLOBAL commands so the bot profile shows "Supports Slash Commands".
+ * Optionally also deploys to a guild for instant testing when SLASH_COMMANDS_GUILD_ID is set.
  */
 
 const fs = require("fs");
@@ -71,26 +71,31 @@ async function registerSlashCommands(client) {
         null;
 
     try {
-        if (guildId && process.env.SLASH_COMMANDS_GLOBAL !== "1") {
-            console.log(
-                `[SlashRegister] Deploying ${body.length} commands to guild ${guildId}…`
-            );
-            await rest.put(Routes.applicationGuildCommands(clientId, guildId), {
-                body
-            });
-            console.log(
-                `✅ Registered ${body.length} guild slash command(s) (includes /imagine)`
-            );
-            return { ok: true, scope: "guild", count: body.length, guildId };
-        }
-
+        // Global registration is required for the "Supports Slash Commands" profile badge
         console.log(
-            `[SlashRegister] Deploying ${body.length} GLOBAL application commands…`
+            `[SlashRegister] Deploying ${body.length} GLOBAL application commands (profile badge)…`
         );
         await rest.put(Routes.applicationCommands(clientId), { body });
         console.log(
-            `✅ Registered ${body.length} global slash command(s) (includes /imagine). Global commands can take up to ~1 hour to appear everywhere.`
+            `✅ Registered ${body.length} global slash command(s). Badge can take a short while to appear on the bot profile.`
         );
+
+        if (guildId && process.env.SLASH_COMMANDS_GUILD_MIRROR !== "0") {
+            try {
+                await rest.put(Routes.applicationGuildCommands(clientId, guildId), {
+                    body
+                });
+                console.log(
+                    `✅ Mirrored ${body.length} command(s) to guild ${guildId} for instant testing`
+                );
+            } catch (err) {
+                console.warn(
+                    "[SlashRegister] Guild mirror failed:",
+                    err?.message || err
+                );
+            }
+        }
+
         return { ok: true, scope: "global", count: body.length };
     } catch (err) {
         console.error(

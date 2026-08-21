@@ -13,23 +13,33 @@ module.exports = {
         const embed = new EmbedBuilder()
             .setTitle("🤖 OmniBot Help")
             .setDescription(
-                "All-in-one Discord bot with moderation, leveling, music, and AI tools.\n" +
-                `AI features share **${DAILY_LIMIT} requests per server per day**.`
+                "All-in-one Discord bot — moderation, AI, music, economy, appeals, and more.\n" +
+                    `AI features share **${DAILY_LIMIT} requests per server per day**.\n` +
+                    "Staff-only commands require the matching Discord permission (e.g. Ban Members, Manage Server)."
             )
             .addFields(
                 {
                     name: "🧠 AI",
                     value:
                         "`/ask` `/chat` `/aisummary` `/aihelp` `/aiassistant`\n" +
-                        "`/aimoderate` `/aiincident` `/aisecurity` `/clearmemory`\n" +
-                        "Use `/aihelp` to ask how a feature works.",
+                        "`/aimoderate` `/aiincident` `/aisecurity` `/clearmemory` `/imagine`\n" +
+                        "Natural: `omni explain photosynthesis` · Image: `/imagine` or `omni imagine a sunset`",
                     inline: false
                 },
                 {
-                    name: "🛡️ Moderation",
+                    name: "🛡️ Moderation *(staff only)*",
                     value:
                         "`/ban` `/kick` `/timeout` `/warn` `/warnings` `/clearwarnings`\n" +
-                        "`/clear` `/lock` `/unlock` `/slowmode` `/automod` `/modlogs`",
+                        "`/clear` `/lock` `/unlock` `/slowmode` `/modlogs` `/modhistory`\n" +
+                        "`/role` `/nick` — require the matching Discord permission",
+                    inline: false
+                },
+                {
+                    name: "🤖 AutoMod *(Manage Server)*",
+                    value:
+                        "`/automod enable` · `disable` · `addword` · `removeword` · `list` · `sync`\n" +
+                        "`/automod discord` — toggle Discord native AutoMod sync\n" +
+                        "Combines Omni’s filter with **Server Settings → AutoMod** rules",
                     inline: false
                 },
                 {
@@ -41,58 +51,63 @@ module.exports = {
                     name: "🎵 Music",
                     value:
                         "`/play` `/skip` `/stop` `/queue` `/pause` `/resume`\n" +
-                        "`/volume` `/nowplaying` `/lyrics`",
+                        "`/volume` `/nowplaying` `/lyrics` `/loop` `/shuffle` `/seek` `/remove`",
                     inline: false
                 },
                 {
-                    name: "⚙️ Server",
+                    name: "⚙️ Server setup *(staff)*",
                     value:
                         "`/welcome` `/goodbye` `/autorole` `/logging` `/deadchat`\n" +
-                        "`/suggest` `/poll` `/announce` `/serverinfo` `/userinfo`",
+                        "`/suggest` `/poll` `/announce` `/serverinfo` `/userinfo`\n" +
+                        "`/reactionrole` `/giveaway` `/autotranslate`",
                     inline: false
                 },
                 {
-                    name: "🎫 Tickets",
-                    value: "`/ticketsetup` `/ticketstaff`",
-                    inline: false
-                },
-                {
-                    name: "📝 Appeals",
+                    name: "🎫 Tickets & 📝 Appeals",
                     value:
-                        "`/appeal submit|status|view|accept|reject|moreinfo|list`\n" +
-                        "`/appealsetup` — default form works out of the box",
+                        "`/ticketsetup` `/ticketstaff`\n" +
+                        "`/appeal` (submit · status · view · accept · reject · list)\n" +
+                        "`/appealsetup` — also use the website **Appeal a punishment** button",
                     inline: false
                 },
                 {
                     name: "🎯 Quizzes",
                     value:
                         "`/quiz start|stop|leaderboard|stats|categories`\n" +
-                        "`/quizsetup` — built-in questions, multiplayer scoring",
+                        "`/quizsetup`",
                     inline: false
                 },
                 {
-                    name: "🎮 Games & Economy",
+                    name: "🎮 Games & economy",
                     value:
                         "`/balance` `/daily` `/work` `/pay` `/shop` `/buy` `/inventory` `/rich`\n" +
-                        "`/coinflip` `/dice` `/rps` `/slots` `/trivia` `/quiz` `/guessnumber` `/higherlower`",
+                        "`/coinflip` `/dice` `/rps` `/slots` `/trivia` `/guessnumber` `/higherlower`",
+                    inline: false
+                },
+                {
+                    name: "📢 Advertise",
+                    value:
+                        "`/advertise publish|unpublish|status` — list your server on the website directory\n" +
+                        "Browse listings on the site → **Advertise** (no login required)",
                     inline: false
                 },
                 {
                     name: "🔧 Utility",
-                    value: "`/ping` `/help` `/dashboard` `/translate` `/autotranslate`",
+                    value:
+                        "`/ping` `/help` `/dashboard` `/translate` `/privacy` `/terms`",
                     inline: false
                 },
                 {
                     name: "💬 Text & natural commands",
                     value:
-                        "Use `!command`, or mention **omni** / **omnibot** anywhere in a message.\n" +
-                        "Examples: `!ping` · `hey omni help` · `omni dashboard`\n" +
-                        "AI questions that mention omni share the daily AI limit.",
+                        "Prefix: `!command` · Natural: `omni …` / `omnibot …` (or the bot’s nickname)\n" +
+                        "Examples: `!help` · `omni help` · `omni dashboard` · `gary help` (if nicknamed)\n" +
+                        "Staff commands still require Discord permissions — regular members cannot use them.",
                     inline: false
                 }
             )
             .setFooter({
-                text: "OmniBot • AI tools use a shared daily server limit"
+                text: "OmniBot • Dashboard: https://omnibot.wisp.uno"
             })
             .setTimestamp();
 
