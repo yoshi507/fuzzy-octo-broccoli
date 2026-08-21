@@ -62,83 +62,33 @@ function syncDeadChatToBotStore(guildId) {
 function readPath(guildId, storagePath) {
   const parts = storagePath.split('.');
   const root = parts[0];
+  const db = loadDatabase();
 
   if (root === 'appeals') {
-    const { getSettings } = require('../../utils/appeals/store.js');
-    let node = getSettings(guildId);
-    for (let i = 1; i < parts.length; i++) {
-      if (node == null) return undefined;
-      node = node[parts[i]];
+    try {
+      const { getSettings } = require('../../utils/appeals/store.js');
+      let node = getSettings(guildId);
+      for (let i = 1; i < parts.length; i++) {
+        if (node == null) return undefined;
+        node = node[parts[i]];
+      }
+      return node;
+    } catch {
+      return undefined;
     }
-    return node;
-  }
-  if (root === 'quiz') {
-    const { getSettings } = require('../../utils/quiz/store.js');
-    let node = getSettings(guildId);
-    for (let i = 1; i < parts.length; i++) {
-      if (node == null) return undefined;
-      node = node[parts[i]];
-    }
-    return node;
-  }
-
-  if (root === 'security') {
-    const sec = getGuildSecurity(guildId);
-    let node = sec;
-    for (let i = 1; i < parts.length; i++) {
-      if (node == null) return undefined;
-      node = node[parts[i]];
-    }
-    if (storagePath === 'security.antiNuke.windowMs' && typeof node === 'number') {
-      return Math.round(node / 1000);
-    }
-    return node;
   }
 
   if (root === 'deadChat') {
-    const { resolveDeadChatForGuild } = require('../../utils/configSync.js');
-    const dc = resolveDeadChatForGuild(guildId);
-    if (parts[1] === 'enabled') return Boolean(dc.enabled);
-    if (parts[1] === 'minutes') return dc.minutes ?? 30;
-    if (parts[1] === 'channelId') return dc.channelId || null;
-    return undefined;
-  }
-
-  if (root === 'aiLimit') {
-    return 20;
-  }
-
-  const db = loadDatabase();
-
-  if (root === 'dashboard') {
-    let node = db.dashboard?.[guildId];
-    for (let i = 1; i < parts.length; i++) {
-      if (node == null) return undefined;
-      node = node[parts[i]];
-    }
-    return node;
-  }
-
-  if (root === 'spamConfig') {
-    const cfg = db.spamConfig?.[guildId];
-    if (parts[1] === 'enabled') return cfg?.enabled !== false;
-    return undefined;
-  }
-
-  if (root === 'music') {
-    const m = db.music?.[guildId] || {};
-    if (parts[1] === 'enabled') return m.enabled !== false;
-    if (parts[1] === 'defaultVolume') return m.defaultVolume ?? 80;
-    return undefined;
-  }
-
-  if (root === 'commandSettings') {
-    const c = db.commandSettings?.[guildId] || {};
-    if (parts[1] === 'prefix') return c.prefix || '!';
+    const node = db.dashboard?.[guildId]?.deadChat || {};
+    if (parts.length === 1) return node;
+    if (parts[1] === 'enabled') return Boolean(node.enabled);
+    if (parts[1] === 'minutes') return node.minutes ?? 30;
+    if (parts[1] === 'channelId') return node.channelId || null;
     return undefined;
   }
 
   let node = db[root]?.[guildId];
+  if (node == null) return undefined;
   for (let i = 1; i < parts.length; i++) {
     if (node == null) return undefined;
     node = node[parts[i]];
@@ -149,89 +99,34 @@ function readPath(guildId, storagePath) {
 function writePath(guildId, storagePath, value) {
   const parts = storagePath.split('.');
   const root = parts[0];
-
-  if (root === 'appeals') {
-    const { setSettings } = require('../../utils/appeals/store.js');
-    const keys = parts.slice(1);
-    if (keys.length === 1) setSettings(guildId, { [keys[0]]: value });
-    return;
-  }
-  if (root === 'quiz') {
-    const { setSettings } = require('../../utils/quiz/store.js');
-    const keys = parts.slice(1);
-    if (keys.length === 1) setSettings(guildId, { [keys[0]]: value });
-    return;
-  }
-
-  if (root === 'security') {
-    const sec = getGuildSecurity(guildId);
-    let node = sec;
-    for (let i = 1; i < parts.length - 1; i++) {
-      if (!node[parts[i]] || typeof node[parts[i]] !== 'object') node[parts[i]] = {};
-      node = node[parts[i]];
-    }
-    let writeVal = value;
-    if (storagePath === 'security.antiNuke.windowMs') writeVal = Math.round(Number(value) * 1000);
-    node[parts[parts.length - 1]] = writeVal;
-    setGuildSecurity(guildId, sec);
-    return;
-  }
+  const db = loadDatabase();
 
   if (root === 'deadChat') {
-    const db = loadDatabase();
-    ensureGuildObj(db, 'dashboard', guildId);
+    if (!db.dashboard) db.dashboard = {};
+    if (!db.dashboard[guildId]) db.dashboard[guildId] = {};
     if (!db.dashboard[guildId].deadChat) db.dashboard[guildId].deadChat = {};
     if (parts[1] === 'enabled') db.dashboard[guildId].deadChat.enabled = Boolean(value);
     if (parts[1] === 'minutes') db.dashboard[guildId].deadChat.minutes = Number(value);
     if (parts[1] === 'channelId') db.dashboard[guildId].deadChat.channelId = value || null;
     saveDatabase(db);
-    const { mirrorDeadChatToChannelStore } = require('../../utils/configSync.js');
-    mirrorDeadChatToChannelStore(guildId, db.dashboard[guildId].deadChat);
     syncDeadChatToBotStore(guildId);
     return;
   }
 
-  const db = loadDatabase();
-
-  if (root === 'aiLimit') {
-    // Daily AI limit is fixed at 20 and cannot be changed via the dashboard.
-    return;
-  }
-
-  if (root === 'dashboard') {
-    ensureGuildObj(db, 'dashboard', guildId);
-    let node = db.dashboard[guildId];
-    for (let i = 1; i < parts.length - 1; i++) {
-      if (!node[parts[i]] || typeof node[parts[i]] !== 'object') node[parts[i]] = {};
-      node = node[parts[i]];
+  if (root === 'automod') {
+    if (!db.automod) db.automod = {};
+    if (!db.automod[guildId]) db.automod[guildId] = { enabled: false, blockedWords: [] };
+    if (parts[1] === 'enabled') db.automod[guildId].enabled = Boolean(value);
+    if (parts[1] === 'blockedWords') {
+      if (Array.isArray(value)) db.automod[guildId].blockedWords = value;
+      else db.automod[guildId].blockedWords = String(value || '');
     }
-    node[parts[parts.length - 1]] = value;
     saveDatabase(db);
     return;
   }
 
-  if (root === 'spamConfig') {
-    ensureGuildObj(db, 'spamConfig', guildId);
-    if (parts[1] === 'enabled') db.spamConfig[guildId].enabled = Boolean(value);
-    saveDatabase(db);
-    return;
-  }
-
-  if (root === 'music') {
-    ensureGuildObj(db, 'music', guildId);
-    db.music[guildId][parts[1]] = value;
-    saveDatabase(db);
-    return;
-  }
-
-  if (root === 'commandSettings') {
-    ensureGuildObj(db, 'commandSettings', guildId);
-    db.commandSettings[guildId][parts[1]] = value;
-    saveDatabase(db);
-    return;
-  }
-
-  ensureGuildObj(db, root, guildId);
+  if (!db[root]) db[root] = {};
+  if (!db[root][guildId]) db[root][guildId] = {};
   let node = db[root][guildId];
   for (let i = 1; i < parts.length - 1; i++) {
     if (!node[parts[i]] || typeof node[parts[i]] !== 'object') node[parts[i]] = {};
@@ -242,45 +137,24 @@ function writePath(guildId, storagePath, value) {
 }
 
 function getGuildSettings(guildId) {
-  const result = getDefaults();
-  for (const def of SETTINGS) {
-    const raw = readPath(guildId, def.path);
-    if (raw !== undefined) result[def.id] = raw;
+  const out = getDefaults();
+  for (const setting of SETTINGS) {
+    const val = readPath(guildId, setting.path);
+    if (val !== undefined) out[setting.id] = val;
   }
-  return result;
+  return out;
 }
 
 function applyPatch(guildId, patch, user) {
-  if (!patch || typeof patch !== 'object' || Array.isArray(patch)) {
-    const err = new Error('patch must be an object');
-    err.status = 400;
-    err.code = 'VALIDATION';
-    throw err;
-  }
-  const errors = {};
   const applied = {};
-  for (const [id, value] of Object.entries(patch)) {
-    const def = getSettingById(id);
-    const result = validateSetting(def, value);
-    if (!result.ok) {
-      errors[id] = result.error;
-      continue;
-    }
-    applied[id] = result.value;
+  for (const [id, value] of Object.entries(patch || {})) {
+    const setting = getSettingById(id);
+    if (!setting) continue;
+    const validated = validateSetting(setting, value);
+    writePath(guildId, setting.path, validated);
+    applied[id] = validated;
   }
-  if (Object.keys(errors).length) {
-    const err = new Error('Validation failed: ' + Object.entries(errors).map(([k, v]) => k + ': ' + v).join('; '));
-    err.status = 400;
-    err.code = 'VALIDATION';
-    err.errors = errors;
-    throw err;
-  }
-  for (const [id, value] of Object.entries(applied)) {
-    writePath(guildId, getSettingById(id).path, value);
-  }
-  if (Object.keys(applied).some((k) => k.startsWith('deadchat.'))) {
-    syncDeadChatToBotStore(guildId);
-  }
+
   const hist = loadHistory();
   if (!hist[guildId]) hist[guildId] = [];
   hist[guildId].unshift({
@@ -291,6 +165,30 @@ function applyPatch(guildId, patch, user) {
   });
   hist[guildId] = hist[guildId].slice(0, 50);
   saveHistory(hist);
+
+  try {
+    const automodKeys = Object.keys(patch || {}).filter(
+      (k) => k.startsWith('moderation.automod') || k.startsWith('moderation.blocked')
+    );
+    if (automodKeys.length) {
+      const { normalizeWords, syncDiscordAutoMod } = require('../../utils/automod/helpers.js');
+      const db2 = loadDatabase();
+      const node = db2.automod?.[guildId] || {};
+      let words = node.blockedWords;
+      if (typeof words === 'string') words = normalizeWords(words);
+      const discordClient = global.__omnibotClient || null;
+      const guild = discordClient?.guilds?.cache?.get(String(guildId));
+      if (guild) {
+        syncDiscordAutoMod(guild, {
+          enabled: Boolean(node.enabled) && node.useDiscordAutoMod !== false,
+          words: words || []
+        }).catch((e) => console.warn('[settingsBridge] automod sync', e?.message || e));
+      }
+    }
+  } catch (e) {
+    console.warn('[settingsBridge] automod hook', e?.message || e);
+  }
+
   return getGuildSettings(guildId);
 }
 
