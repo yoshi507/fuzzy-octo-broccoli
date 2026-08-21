@@ -28,7 +28,8 @@ const state = {
   appealSearch: '',
   appealForm: null,
   appealGuild: null,
-  appealSubmitting: false
+  appealSubmitting: false,
+  oauthError: null
 };
 
 function toast(msg, type) {
@@ -39,6 +40,13 @@ function toast(msg, type) {
   el.classList.remove('hidden');
   clearTimeout(toast._t);
   toast._t = setTimeout(function () { el.classList.add('hidden'); }, 4200);
+}
+
+function isTyping() {
+  var a = document.activeElement;
+  if (!a) return false;
+  var tag = (a.tagName || '').toLowerCase();
+  return tag === 'input' || tag === 'textarea' || tag === 'select' || a.isContentEditable;
 }
 
 async function api(path, opts) {
@@ -77,8 +85,12 @@ function settingVal(id) {
   return state.settings[id];
 }
 
+/** Canonical redirect — must match Discord Developer Portal exactly. */
 function redirectUri() {
-  return window.location.origin + window.location.pathname.replace(/\/?$/, '/');
+  if (state.oauth && state.oauth.redirectUri) {
+    return String(state.oauth.redirectUri);
+  }
+  return String(window.location.origin || '').replace(/\/$/, '') + '/';
 }
 
 async function loadOAuthConfig() {
@@ -93,17 +105,34 @@ function startLogin(intent) {
   intent = intent || 'dashboard';
   localStorage.setItem(INTENT_KEY, intent);
   state.mode = intent;
+  state.oauthError = null;
   const clientId = (state.oauth && state.oauth.clientId) || '1538542627882799155';
   const url = new URL('https://discord.com/api/oauth2/authorize');
   url.searchParams.set('client_id', clientId);
   url.searchParams.set('response_type', 'code');
   url.searchParams.set('redirect_uri', redirectUri());
   url.searchParams.set('scope', 'identify guilds');
+  url.searchParams.set('prompt', 'consent');
   window.location.href = url.toString();
 }
 
 async function handleOAuthCallback() {
   const params = new URLSearchParams(window.location.search);
+  const err = params.get('error');
+  const errDesc = params.get('error_description');
+  if (err) {
+    state.oauthError =
+      errDesc ||
+      err ||
+      'Discord login failed. Check that the redirect URL is registered in the Discord Developer Portal.';
+    if (err === 'invalid_request') {
+      state.oauthError =
+        'Discord rejected the login (invalid_request). Add this exact Redirect URL in the Discord Developer Portal → OAuth2 → Redirects:\n' +
+        redirectUri();
+    }
+    window.history.replaceState({}, '', window.location.pathname || '/');
+    return;
+  }
   const code = params.get('code');
   if (!code) return;
   try {
@@ -111,14 +140,15 @@ async function handleOAuthCallback() {
       method: 'POST',
       body: JSON.stringify({ code: code, redirectUri: redirectUri() })
     });
-    if (data && data.token) {
-      state.token = data.token;
-      localStorage.setItem(TOKEN_KEY, data.token);
+    var tok = (data && (data.token || data.accessToken)) || null;
+    if (tok) {
+      state.token = tok;
+      localStorage.setItem(TOKEN_KEY, tok);
     }
-    window.history.replaceState({}, '', window.location.pathname);
+    window.history.replaceState({}, '', window.location.pathname || '/');
   } catch (e) {
-    window.history.replaceState({}, '', window.location.pathname);
-    throw e;
+    state.oauthError = e.message || 'Login failed';
+    window.history.replaceState({}, '', window.location.pathname || '/');
   }
 }
 
@@ -134,18 +164,47 @@ async function loadAppealDirectory() {
 }
 async function loadAppealForm(guildId) {
   state.appealForm = await api('/appeals/guilds/' + guildId + '/form');
-  state.appealGuild = (state.appealDirectory || []).find(function (g) { return String(g.id) === String(guildId); }) || { id: guildId };
+  state.appealGuild = (state.appealDirectory || []).find(function (g) {
+    return String(g.id) === String(guildId);
+  }) || { id: guildId };
 }
+
+function softUpdateOverviewStatus() {
+  try {
+    var bot = state.bot || {};
+    var stats = state.stats || {};
+    var statusPill = document.querySelector('[data-bot-status]');
+    if (statusPill) {
+      var online = state.bot == null ? 'Unknown' : (bot.online ? 'Online' : 'Offline');
+      statusPill.textContent = online;
+      statusPill.className = 'pill ' + (state.bot == null ? '' : (bot.online ? 'ok' : 'err'));
+    }
+    var setText = function (sel, val) {
+      var el = document.querySelector(sel);
+      if (el) el.textContent = val;
+    };
+    setText('[data-stat-members]', stats.members != null ? String(stats.members) : '—');
+    setText('[data-stat-ai]', (stats.aiUsedToday != null ? stats.aiUsedToday : 0) + ' / 20');
+    setText('[data-stat-latency]', bot.latencyMs != null ? bot.latencyMs + ' ms' : '—');
+  } catch (e) { /* ignore */ }
+}
+
 async function refreshGuildData(silent) {
   if (!state.guild) return;
   try {
     await loadGuildData();
-    if (!silent) toast('Synced with server', 'ok');
+    if (silent) {
+      if (isTyping()) return;
+      softUpdateOverviewStatus();
+      return;
+    }
+    toast('Synced with server', 'ok');
     render();
   } catch (e) {
     if (!silent) toast(e.message || 'Sync failed', 'err');
   }
 }
+
 async function loadGuildData() {
   if (!state.guild) return;
   const id = state.guild.id;
@@ -176,6 +235,7 @@ async function loadGuildData() {
   state.settingsHistory = results[9].status === 'fulfilled' ? results[9].value : null;
   state.tickets = results[10].status === 'fulfilled' ? results[10].value : null;
 }
+
 async function saveSettings(patch) {
   const id = state.guild.id;
   await api('/guilds/' + id + '/settings', { method: 'PUT', body: JSON.stringify({ patch: patch }) });
@@ -198,7 +258,8 @@ async function logout() {
   try { await api('/auth/logout', { method: 'POST', body: '{}' }); } catch (e) {}
   state.token = null; state.user = null; state.guild = null; state.guilds = [];
   state.appealForm = null; state.appealGuild = null; state.appealDirectory = [];
-  localStorage.removeItem(TOKEN_KEY); localStorage.removeItem(GUILD_KEY);
+  state.mode = 'dashboard';
+  localStorage.removeItem(TOKEN_KEY); localStorage.removeItem(GUILD_KEY); localStorage.removeItem(INTENT_KEY);
   render();
 }
 function channelOptions(selected) {
@@ -222,5 +283,14 @@ function renderOverview() {
   var bot = state.bot || {}, stats = state.stats || {};
   var online = state.bot == null ? 'Unknown' : (bot.online ? 'Online' : 'Offline');
   var onlineCls = state.bot == null ? '' : (bot.online ? 'ok' : 'err');
-  return '<div class="card"><h2>' + escapeHtml(state.guild.name) + '</h2><p class="help">Server overview and live bot status. Use Refresh after changing settings in Discord.</p><div class="grid2"><div class="stat"><div class="status">Bot status</div><div class="pill ' + onlineCls + '">' + online + '</div></div><div class="stat"><div class="status">Members</div><strong>' + escapeHtml(stats.members != null ? stats.members : '—') + '</strong></div><div class="stat"><div class="status">AI used today</div><strong>' + escapeHtml((stats.aiUsedToday != null ? stats.aiUsedToday : 0) + ' / 20') + '</strong></div><div class="stat"><div class="status">Warnings</div><strong>' + escapeHtml(stats.warnings != null ? stats.warnings : 0) + '</strong></div><div class="stat"><div class="status">Active giveaways</div><strong>' + escapeHtml(stats.activeGiveaways != null ? stats.activeGiveaways : 0) + '</strong></div><div class="stat"><div class="status">Reaction-role panels</div><strong>' + escapeHtml(stats.reactionRolePanels != null ? stats.reactionRolePanels : 0) + '</strong></div><div class="stat"><div class="status">Enabled features</div><strong>' + enabled + '</strong></div><div class="stat"><div class="status">Latency</div><strong>' + escapeHtml(bot.latencyMs != null ? bot.latencyMs + ' ms' : '—') + '</strong></div></div></div>';
+  return '<div class="card"><h2>' + escapeHtml(state.guild.name) + '</h2><p class="help">Server overview and live bot status.</p><div class="grid2">' +
+    '<div class="stat"><div class="status">Bot status</div><div class="pill ' + onlineCls + '" data-bot-status>' + online + '</div></div>' +
+    '<div class="stat"><div class="status">Members</div><strong data-stat-members>' + escapeHtml(stats.members != null ? stats.members : '—') + '</strong></div>' +
+    '<div class="stat"><div class="status">AI used today</div><strong data-stat-ai>' + escapeHtml((stats.aiUsedToday != null ? stats.aiUsedToday : 0) + ' / 20') + '</strong></div>' +
+    '<div class="stat"><div class="status">Warnings</div><strong>' + escapeHtml(stats.warnings != null ? stats.warnings : 0) + '</strong></div>' +
+    '<div class="stat"><div class="status">Active giveaways</div><strong>' + escapeHtml(stats.activeGiveaways != null ? stats.activeGiveaways : 0) + '</strong></div>' +
+    '<div class="stat"><div class="status">Reaction-role panels</div><strong>' + escapeHtml(stats.reactionRolePanels != null ? stats.reactionRolePanels : 0) + '</strong></div>' +
+    '<div class="stat"><div class="status">Enabled features</div><strong>' + enabled + '</strong></div>' +
+    '<div class="stat"><div class="status">Latency</div><strong data-stat-latency>' + escapeHtml(bot.latencyMs != null ? bot.latencyMs + ' ms' : '—') + '</strong></div>' +
+    '</div></div>';
 }
