@@ -9,24 +9,40 @@ if (!fs.existsSync("./database")) {
 if (!fs.existsSync(databaseFile)) {
     fs.writeFileSync(
         databaseFile,
-        JSON.stringify({
-            warnings: []
-        }, null, 2)
+        JSON.stringify(
+            {
+                warnings: []
+            },
+            null,
+            2
+        )
     );
 }
 
+/** In-memory cache — avoids re-reading disk on every message event. */
+let cache = null;
+
 function loadDatabase() {
-    return JSON.parse(fs.readFileSync(databaseFile, "utf8"));
+    if (cache) return cache;
+    try {
+        cache = JSON.parse(fs.readFileSync(databaseFile, "utf8"));
+    } catch {
+        cache = { warnings: [] };
+    }
+    return cache;
 }
 
 function saveDatabase(data) {
-    fs.writeFileSync(
-        databaseFile,
-        JSON.stringify(data, null, 2)
-    );
+    cache = data || cache || { warnings: [] };
+    fs.writeFileSync(databaseFile, JSON.stringify(cache, null, 2));
+}
+
+function invalidateDatabaseCache() {
+    cache = null;
 }
 
 module.exports = {
     loadDatabase,
-    saveDatabase
+    saveDatabase,
+    invalidateDatabaseCache
 };
