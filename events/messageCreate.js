@@ -1,6 +1,5 @@
 const {
-    translateText,
-    resolveLanguageCode
+    translateText
 } = require("../utils/translator.js");
 
 const {
@@ -34,9 +33,8 @@ module.exports = {
             /* non-fatal */
         }
 
-        let wasInvocation = false;
         try {
-            wasInvocation = await handleTextInvocation(message);
+            const wasInvocation = await handleTextInvocation(message);
             if (wasInvocation) return;
         } catch (error) {
             console.error(
@@ -45,32 +43,36 @@ module.exports = {
             );
         }
 
+        let database;
         try {
-            const database = loadDatabase();
+            database = loadDatabase();
+        } catch (error) {
+            console.error("Database load error:", error?.message || error);
+            return;
+        }
 
-            const autoTranslate =
-                database.autoTranslate?.[message.guild.id];
-
+        try {
+            const autoTranslate = database.autoTranslate?.[message.guild.id];
             if (
                 autoTranslate?.enabled &&
                 autoTranslate.target &&
+                message.content &&
                 !message.content.startsWith("/")
             ) {
                 const translated = await translateText(
                     message.content,
                     autoTranslate.target
                 );
-
                 if (
                     translated &&
-                    translated.toLowerCase() !==
-                        message.content.toLowerCase()
+                    translated.toLowerCase() !== message.content.toLowerCase()
                 ) {
-                    await message.reply({
-                        content:
-                            `🌐 **Auto-translate → ${autoTranslate.target}**\n${translated}`,
-                        allowedMentions: { repliedUser: false }
-                    }).catch(() => {});
+                    await message
+                        .reply({
+                            content: `🌐 **Auto-translate → ${autoTranslate.target}**\n${translated}`,
+                            allowedMentions: { repliedUser: false }
+                        })
+                        .catch(() => {});
                 }
             }
         } catch (error) {
@@ -83,14 +85,14 @@ module.exports = {
         }
 
         try {
-            const database = loadDatabase();
             const automod = database.automod?.[message.guild.id];
-
-            // Omni in-chat filter (backup when Discord AutoMod is off or missed a match)
             if (automod?.enabled) {
                 let words = automod.blockedWords;
                 if (typeof words === "string") {
-                    words = words.split(/[\n,]+/).map((s) => s.trim()).filter(Boolean);
+                    words = words
+                        .split(/[\n,]+/)
+                        .map((s) => s.trim())
+                        .filter(Boolean);
                 }
                 if (Array.isArray(words) && words.length) {
                     const content = message.content.toLowerCase();
@@ -105,7 +107,10 @@ module.exports = {
                                 allowedMentions: { users: [message.author.id] }
                             })
                             .then((m) => {
-                                setTimeout(() => m.delete().catch(() => {}), 5000);
+                                setTimeout(
+                                    () => m.delete().catch(() => {}),
+                                    5000
+                                );
                             })
                             .catch(() => {});
 
@@ -126,8 +131,6 @@ module.exports = {
         }
 
         try {
-            const database = loadDatabase();
-
             if (!database.spam) database.spam = {};
             if (!database.spam[message.guild.id]) {
                 database.spam[message.guild.id] = {};
@@ -149,7 +152,10 @@ module.exports = {
                     (t) => now - t < 7000
                 );
                 guildSpam[userId].push(now);
-                saveDatabase(database);
+
+                if (guildSpam[userId].length >= 5) {
+                    saveDatabase(database);
+                }
 
                 if (guildSpam[userId].length >= 6) {
                     const member = message.member;
@@ -172,9 +178,7 @@ module.exports = {
         }
 
         try {
-            const database = loadDatabase();
             const settings = database.levelSettings?.[message.guild.id];
-
             if (settings?.enabled !== false) {
                 const result = addXP(
                     message.guild.id,
