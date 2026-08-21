@@ -282,10 +282,17 @@ async function boot() {
         state.oauthError = null;
         try { var t = document.getElementById('toast'); if (t) t.classList.add('hidden'); } catch (e) {}
         var intent = localStorage.getItem(INTENT_KEY) || 'dashboard';
-        state.mode = intent === 'appeals' ? 'appeals' : (intent === 'advertise' ? 'advertise' : 'dashboard');
+        if (intent !== 'appeals' && intent !== 'advertise' && intent !== 'dashboard') intent = 'dashboard';
+        state.mode = intent;
+        if (typeof goToIntent === 'function') {
+          await goToIntent(intent);
+          return;
+        }
         if (state.mode === 'appeals') {
           await loadAppealDirectory();
-        } else if (state.mode !== 'advertise') {
+        } else if (state.mode === 'advertise') {
+          /* advertise page script handles directory */
+        } else {
           await loadGuilds();
           if (state.guild) {
             var still = state.guilds.find(function (g) { return String(g.id) === String(state.guild.id); });
