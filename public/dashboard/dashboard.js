@@ -93,7 +93,6 @@ function redirectUri() {
   return String(window.location.origin || '').replace(/\/$/, '') + '/';
 }
 
-/** Same redirect used at authorize time (prevents invalid_request / invalid code). */
 function redirectUriForExchange() {
   try {
     var stored = sessionStorage.getItem('omnibot_oauth_redirect');
@@ -110,6 +109,13 @@ function clearOAuthQueryFromUrl() {
   } catch (e) {}
 }
 
+function hideToast() {
+  try {
+    var t = document.getElementById('toast');
+    if (t) t.classList.add('hidden');
+  } catch (e) {}
+}
+
 async function loadOAuthConfig() {
   try {
     state.oauth = await api('/auth/config');
@@ -118,38 +124,45 @@ async function loadOAuthConfig() {
   }
 }
 
+/** Primary login entry — used by buttons (also exposed on window). */
 function startLogin(intent) {
   intent = intent || 'dashboard';
-  localStorage.setItem(INTENT_KEY, intent);
+  try {
+    localStorage.setItem(INTENT_KEY, intent);
+  } catch (e) {}
   state.mode = intent;
   state.oauthError = null;
-  try {
-    var t = document.getElementById('toast');
-    if (t) t.classList.add('hidden');
-  } catch (e) {}
-  const clientId = (state.oauth && state.oauth.clientId) || '1538542627882799155';
-  const redir = redirectUri();
+  hideToast();
+
+  var clientId = (state.oauth && state.oauth.clientId) || '1538542627882799155';
+  var redir = redirectUri();
   try {
     sessionStorage.setItem('omnibot_oauth_redirect', redir);
   } catch (e) {}
-  const url = new URL('https://discord.com/api/oauth2/authorize');
-  url.searchParams.set('client_id', clientId);
-  url.searchParams.set('response_type', 'code');
-  url.searchParams.set('redirect_uri', redir);
-  url.searchParams.set('scope', 'identify guilds');
-  url.searchParams.set('prompt', 'consent');
-  window.location.href = url.toString();
+
+  var url =
+    'https://discord.com/api/oauth2/authorize' +
+    '?client_id=' + encodeURIComponent(clientId) +
+    '&response_type=code' +
+    '&redirect_uri=' + encodeURIComponent(redir) +
+    '&scope=' + encodeURIComponent('identify guilds') +
+    '&prompt=consent';
+
+  window.location.assign(url);
 }
+try { window.startLogin = startLogin; } catch (e) {}
+
+var __oauthExchangePromise = null;
+var __oauthExchangedCodes = {};
 
 async function handleOAuthCallback() {
-  const params = new URLSearchParams(window.location.search);
-  const err = params.get('error');
-  const errDesc = params.get('error_description');
-  const code = params.get('code');
+  var params = new URLSearchParams(window.location.search);
+  var err = params.get('error');
+  var errDesc = params.get('error_description');
+  var code = params.get('code');
 
   if (!err && !code) return;
 
-  // Strip OAuth params immediately so refresh cannot re-use the code
   clearOAuthQueryFromUrl();
 
   if (err) {
@@ -160,7 +173,7 @@ async function handleOAuthCallback() {
     var msg = errDesc || err || 'Discord login failed.';
     if (err === 'invalid_request') {
       msg =
-        'Discord rejected the login redirect. In the Discord Developer Portal → OAuth2 → Redirects, add exactly:\n' +
+        'Discord rejected the login redirect. Add this exact URL under Discord Developer Portal → OAuth2 → Redirects:\n' +
         redirectUriForExchange();
     }
     state.oauthError = msg;
@@ -169,22 +182,25 @@ async function handleOAuthCallback() {
 
   if (!code) return;
 
-  var codeKey = 'omnibot_oauth_code_' + code;
-  try {
-    if (sessionStorage.getItem(codeKey) === 'used') {
-      state.oauthError = null;
-      return;
-    }
-    sessionStorage.setItem(codeKey, 'used');
-  } catch (e) {}
-
   if (state.token) {
     state.oauthError = null;
     return;
   }
 
-  try {
-    const data = await api('/auth/callback', {
+  if (__oauthExchangedCodes[code]) {
+    state.oauthError = null;
+    return;
+  }
+
+  if (__oauthExchangePromise) {
+    try {
+      await __oauthExchangePromise;
+    } catch (e) {}
+    return;
+  }
+
+  __oauthExchangePromise = (async function () {
+    var data = await api('/auth/callback', {
       method: 'POST',
       body: JSON.stringify({
         code: code,
@@ -192,28 +208,36 @@ async function handleOAuthCallback() {
       })
     });
     var tok = (data && (data.token || data.accessToken)) || null;
-    if (tok) {
-      state.token = tok;
-      localStorage.setItem(TOKEN_KEY, tok);
-      state.oauthError = null;
-      try {
-        sessionStorage.removeItem('omnibot_oauth_redirect');
-        var t = document.getElementById('toast');
-        if (t) t.classList.add('hidden');
-      } catch (e) {}
-    } else {
-      state.oauthError = 'Login succeeded but no session token was returned. Please try again.';
+    if (!tok) {
+      throw new Error('Login succeeded but no session token was returned. Please try again.');
     }
+    state.token = tok;
+    try {
+      localStorage.setItem(TOKEN_KEY, tok);
+    } catch (e) {}
+    state.oauthError = null;
+    __oauthExchangedCodes[code] = true;
+    try {
+      sessionStorage.removeItem('omnibot_oauth_redirect');
+    } catch (e) {}
+    hideToast();
+    return data;
+  })();
+
+  try {
+    await __oauthExchangePromise;
   } catch (e) {
     var m = (e && e.message) || 'Login failed';
     if (/invalid.?code|invalid_grant|already been used/i.test(m)) {
-      if (state.token) {
-        state.oauthError = null;
-        return;
-      }
       m = 'Login code was already used or expired. Click Open Dashboard again to sign in.';
     }
-    state.oauthError = m;
+    if (!state.token) {
+      state.oauthError = m;
+    } else {
+      state.oauthError = null;
+    }
+  } finally {
+    __oauthExchangePromise = null;
   }
 }
 
