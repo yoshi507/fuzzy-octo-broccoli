@@ -35,8 +35,8 @@ async function safeEdit(interaction, payload) {
             return await interaction.editReply(payload);
         }
         return await interaction.reply(payload);
-    } catch {
-        /* ignore Discord API errors during long jobs */
+    } catch (e) {
+        console.error("[imagine] Discord edit/reply failed:", e?.message || e);
     }
 }
 
@@ -118,16 +118,14 @@ module.exports = {
                 });
                 const remaining = getRemaining(interaction.guild.id);
                 const content =
-                    `🎬 **Video generated!** (${frameCount || "?"} frames · ${fps || 12} fps · ~${Math.round(durationSeconds || 3)}s)\n` +
+                    `🎬 **Video generated!** (${frameCount || "?"} frames · ${fps || 6} fps · ~${Math.round(durationSeconds || 3)}s)\n` +
                     `\`${prompt.slice(0, 120)}${prompt.length > 120 ? "…" : ""}\`\n` +
                     `_AI requests left today: **${remaining}/${DAILY_LIMIT}**_`;
 
                 return safeEdit(interaction, { content, files: [file] });
             }
 
-            await safeEdit(interaction, {
-                content: "🖼️ Generating image…"
-            });
+            await safeEdit(interaction, { content: "🖼️ Generating image…" });
 
             const { buffer, contentType } = await generateGuildImage(
                 interaction.guild.id,
@@ -151,15 +149,17 @@ module.exports = {
 
             return safeEdit(interaction, { content, files: [file] });
         } catch (error) {
+            console.error("[imagine] generation failed:", {
+                code: error?.code,
+                status: error?.status,
+                message: error?.message,
+                stack: error?.stack?.split("\n").slice(0, 4).join(" | ")
+            });
             const msg =
                 type === "video"
                     ? formatVideoUserError(error)
                     : formatImageUserError(error);
             await safeEdit(interaction, { content: msg });
-            console.error(
-                "imagine error:",
-                error?.code || error?.message || error
-            );
         }
     }
 };
