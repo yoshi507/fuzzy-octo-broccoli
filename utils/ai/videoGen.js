@@ -196,6 +196,9 @@ function formatVideoUserError(error) {
     if (error.code === "VIDEO_TIMEOUT") {
         return "❌ Video generation timed out. Try a simpler prompt.";
     }
+    if (error.code === "VIDEO_FFMPEG_INTERRUPTED") {
+        return "❌ Video encoding was interrupted by the host (SIGINT). This often happens when the server hits a resource limit — try again or use a shorter prompt.";
+    }
     if (error.code === "VIDEO_TOO_LARGE") {
         return "❌ The generated video was too large to upload. Try a simpler prompt.";
     }
