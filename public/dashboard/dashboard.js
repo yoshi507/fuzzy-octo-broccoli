@@ -85,7 +85,6 @@ function settingVal(id) {
   return state.settings[id];
 }
 
-/** Discord OAuth redirect — prefers server-side callback. */
 function redirectUri() {
   if (state.oauth && state.oauth.redirectUri) {
     return String(state.oauth.redirectUri).trim();
@@ -116,7 +115,6 @@ async function loadOAuthConfig() {
   }
 }
 
-/** Start Discord login — Discord returns to the SERVER callback. */
 function startLogin(intent) {
   intent = intent || 'dashboard';
   try { localStorage.setItem(INTENT_KEY, intent); } catch (e) {}
@@ -139,7 +137,6 @@ function startLogin(intent) {
 }
 try { window.startLogin = startLogin; } catch (e) {}
 
-/** Handle /?login_token= from server callback (or legacy errors/codes). */
 async function handleOAuthCallback() {
   var params = new URLSearchParams(window.location.search);
 
@@ -155,8 +152,23 @@ async function handleOAuthCallback() {
 
   var loginError = params.get('login_error');
   if (loginError) {
-    if (!state.token) state.oauthError = loginError;
     clearAuthQueryFromUrl();
+    if (state.token) {
+      state.oauthError = null;
+      return;
+    }
+    var existing = null;
+    try { existing = localStorage.getItem(TOKEN_KEY); } catch (e) {}
+    if (existing) {
+      state.token = existing;
+      state.oauthError = null;
+      return;
+    }
+    if (/already used|invalid.?code|invalid_grant/i.test(loginError)) {
+      state.oauthError = 'Login almost completed but was interrupted. Please click Open Dashboard once more.';
+    } else {
+      state.oauthError = loginError;
+    }
     return;
   }
 
