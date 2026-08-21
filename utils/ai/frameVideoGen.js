@@ -83,9 +83,6 @@ function runFfmpeg(args, timeoutMs = 90000) {
         proc.on("error", (err) => {
             clearTimeout(timer);
             liveFfmpeg.delete(proc);
-            if (err && err.code === conf) {
-                /* placeholder */
-            }
             if (err && err.code === "ENOENT") {
                 const e = new Error("ffmpeg is not installed");
                 e.code = "VIDEO_FFMPEG_MISSING";
