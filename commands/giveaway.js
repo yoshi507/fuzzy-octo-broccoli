@@ -13,6 +13,7 @@ const {
     endGiveaway,
     addEntry
 } = require("../utils/giveaways/store.js");
+const { scheduleGiveaway, cancelGiveaway } = require("../utils/giveaways/scheduler.js");
 
 function parseDuration(str) {
     const m = String(str || "").trim().match(/^(\d+)\s*(s|m|h|d)$/i);
@@ -34,6 +35,7 @@ function winnersFromEntries(entries, count) {
 }
 
 async function finishGiveaway(client, guildId, giveawayId) {
+    try { cancelGiveaway(guildId, giveawayId); } catch (_) {}
     const g = getGiveaway(guildId, giveawayId);
     if (!g || g.status !== "active") return null;
     const winners = winnersFromEntries(g.entries, g.winnerCount || 1);
@@ -48,71 +50,98 @@ async function finishGiveaway(client, guildId, giveawayId) {
                 winners.length > 0
                     ? winners.map((id) => `<@${id}>`).join(", ")
                     : "No valid entries.";
-            const embed = new EmbedBuilder()
-                .setColor(0xed4245)
-                .setTitle("🎉 Giveaway ended")
-                .setDescription(`**Prize:** ${g.prize}\n**Winners:** ${text}`)
-                .setFooter({ text: `ID ${g.id}` });
-            if (g.messageId) {
+            await ch.send({
+                content: `🎉 Giveaway **${g.prize}** ended!\nWinners: ${text}`
+            }).catch(() => {});
+            try {
                 const msg = await ch.messages.fetch(g.messageId).catch(() => null);
-                if (msg) await msg.edit({ embeds: [embed], components: [] }).catch(() => {});
-                else await ch.send({ embeds: [embed] });
-            } else await ch.send({ embeds: [embed] });
+                if (msg) {
+                    const embed = EmbedBuilder.from(msg.embeds[0] || {});
+                    embed.setColor(0x95a5a6);
+                    embed.setFooter({ text: `Ended · ID ${g.id}` });
+                    await msg.edit({ embeds: [embed], components: [] }).catch(() => {});
+                }
+            } catch (_) {}
         }
     } catch (e) {
-        console.error("Giveaway finish error:", e?.message || e);
+        console.error("finishGiveaway:", e?.message || e);
     }
     return g;
 }
 
 module.exports = {
+    finishGiveaway,
     data: new SlashCommandBuilder()
         .setName("giveaway")
-        .setDescription("Create and manage giveaways")
+        .setDescription("Create or manage giveaways")
         .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
         .addSubcommand((s) =>
-            s.setName("start").setDescription("Start a giveaway")
-                .addStringOption((o) => o.setName("duration").setDescription("e.g. 10m, 1h, 1d").setRequired(true))
-                .addStringOption((o) => o.setName("prize").setDescription("Prize").setRequired(true))
-                .addIntegerOption((o) => o.setName("winners").setDescription("Winner count").setMinValue(1).setMaxValue(20))
-                .addChannelOption((o) => o.setName("channel").setDescription("Channel (default: current)"))
+            s
+                .setName("start")
+                .setDescription("Start a giveaway")
+                .addStringOption((o) =>
+                    o.setName("prize").setDescription("Prize").setRequired(true)
+                )
+                .addStringOption((o) =>
+                    o
+                        .setName("duration")
+                        .setDescription("e.g. 10m, 1h, 1d")
+                        .setRequired(true)
+                )
+                .addIntegerOption((o) =>
+                    o.setName("winners").setDescription("Number of winners").setMinValue(1).setMaxValue(20)
+                )
+                .addChannelOption((o) =>
+                    o.setName("channel").setDescription("Channel for the giveaway")
+                )
         )
         .addSubcommand((s) =>
-            s.setName("end").setDescription("End a giveaway early")
-                .addStringOption((o) => o.setName("id").setDescription("Giveaway ID").setRequired(true))
+            s
+                .setName("end")
+                .setDescription("End a giveaway early")
+                .addStringOption((o) =>
+                    o.setName("id").setDescription("Giveaway ID").setRequired(true)
+                )
         )
         .addSubcommand((s) =>
-            s.setName("cancel").setDescription("Cancel a giveaway")
-                .addStringOption((o) => o.setName("id").setDescription("Giveaway ID").setRequired(true))
+            s
+                .setName("cancel")
+                .setDescription("Cancel a giveaway")
+                .addStringOption((o) =>
+                    o.setName("id").setDescription("Giveaway ID").setRequired(true)
+                )
         )
         .addSubcommand((s) =>
-            s.setName("info").setDescription("Show giveaway info")
-                .addStringOption((o) => o.setName("id").setDescription("Giveaway ID").setRequired(true))
+            s
+                .setName("info")
+                .setDescription("Show giveaway info")
+                .addStringOption((o) =>
+                    o.setName("id").setDescription("Giveaway ID").setRequired(true)
+                )
         ),
-
-    finishGiveaway,
 
     async execute(interaction) {
         const sub = interaction.options.getSubcommand();
-        const guildId = interaction.guild.id;
-        const settings = getSettings(guildId);
-        if (settings.enabled === false && sub === "start") {
-            return interaction.reply({ content: "❌ Giveaways are disabled on this server.", ephemeral: true });
-        }
+        const guildId = interaction.guildId;
 
         if (sub === "start") {
-            const duration = parseDuration(interaction.options.getString("duration"));
-            if (!duration || duration < 10000 || duration > 30 * 86400000) {
+            const durationStr = interaction.options.getString("duration");
+            const duration = parseDuration(durationStr);
+            if (!duration || duration < 10000 || duration > 14 * 86400000) {
                 return interaction.reply({
-                    content: "❌ Invalid duration. Use e.g. `30s`, `10m`, `2h`, `1d` (max 30d).",
+                    content: "❌ Duration must be like `10m`, `1h`, or `1d` (10s–14d).",
                     ephemeral: true
                 });
             }
             const prize = interaction.options.getString("prize").slice(0, 200);
             const winnerCount = interaction.options.getInteger("winners") || 1;
-            const channel = interaction.options.getChannel("channel") || interaction.channel;
+            const channel =
+                interaction.options.getChannel("channel") || interaction.channel;
             if (!channel?.isTextBased?.()) {
-                return interaction.reply({ content: "❌ Need a text channel.", ephemeral: true });
+                return interaction.reply({
+                    content: "❌ Need a text channel.",
+                    ephemeral: true
+                });
             }
 
             const id = `GW-${Date.now().toString(36).toUpperCase()}`;
@@ -146,6 +175,12 @@ module.exports = {
                 entries: [],
                 createdAt: Date.now()
             });
+            try {
+                scheduleGiveaway(
+                    guildId,
+                    getGiveaway(guildId, id) || { id, endsAt, status: "active" }
+                );
+            } catch (_) {}
 
             return interaction.reply({
                 content: `✅ Giveaway **${id}** started in ${channel}.`,
@@ -156,7 +191,11 @@ module.exports = {
         const id = interaction.options.getString("id");
         if (sub === "info") {
             const g = getGiveaway(guildId, id);
-            if (!g) return interaction.reply({ content: "❌ Giveaway not found.", ephemeral: true });
+            if (!g)
+                return interaction.reply({
+                    content: "❌ Giveaway not found.",
+                    ephemeral: true
+                });
             return interaction.reply({
                 content: `**${g.id}** — ${g.prize}\nStatus: ${g.status}\nEntries: ${(g.entries || []).length}\nEnds: <t:${Math.floor(g.endsAt / 1000)}:R>`,
                 ephemeral: true
@@ -166,48 +205,35 @@ module.exports = {
         if (sub === "end") {
             const g = getGiveaway(guildId, id);
             if (!g || g.status !== "active") {
-                return interaction.reply({ content: "❌ Active giveaway not found.", ephemeral: true });
+                return interaction.reply({
+                    content: "❌ Active giveaway not found.",
+                    ephemeral: true
+                });
             }
+            try { cancelGiveaway(guildId, id); } catch (_) {}
             await finishGiveaway(interaction.client, guildId, id);
-            return interaction.reply({ content: `✅ Ended **${id}**.`, ephemeral: true });
+            return interaction.reply({
+                content: `✅ Ended **${id}**.`,
+                ephemeral: true
+            });
         }
 
         if (sub === "cancel") {
             const g = getGiveaway(guildId, id);
             if (!g || g.status !== "active") {
-                return interaction.reply({ content: "❌ Active giveaway not found.", ephemeral: true });
+                return interaction.reply({
+                    content: "❌ Active giveaway not found.",
+                    ephemeral: true
+                });
             }
-            g.status = "cancelled";
+            try { cancelGiveaway(guildId, id); } catch (_) {}
             endGiveaway(guildId, id);
-            return interaction.reply({ content: `✅ Cancelled **${id}**.`, ephemeral: true });
+            return interaction.reply({
+                content: `✅ Cancelled **${id}**.`,
+                ephemeral: true
+            });
         }
-    }
-};
 
-module.exports.handleGiveawayButton = async function handleGiveawayButton(interaction) {
-    if (!interaction.isButton()) return false;
-    if (!interaction.customId.startsWith("giveaway_enter:")) return false;
-    const parts = interaction.customId.split(":");
-    const guildId = parts[1];
-    const id = parts[2];
-    if (interaction.guildId !== guildId) {
-        await interaction.reply({ content: "❌ Wrong server.", ephemeral: true });
-        return true;
+        return interaction.reply({ content: "Unknown subcommand.", ephemeral: true });
     }
-    const result = addEntry(guildId, id, interaction.user.id);
-    if (!result.ok) {
-        await interaction.reply({
-            content:
-                result.reason === "duplicate"
-                    ? "You're already entered!"
-                    : "This giveaway is not active.",
-            ephemeral: true
-        });
-        return true;
-    }
-    await interaction.reply({
-        content: `You're in! (${result.count} entr${result.count === 1 ? "y" : "ies"})`,
-        ephemeral: true
-    });
-    return true;
 };
