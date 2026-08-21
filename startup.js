@@ -1,38 +1,22 @@
 /**
- * Final boot: bind PORT early (Wispbyte), then Discord login.
+ * OmniBot process entry — Discord client + dashboard API.
+ * Resource-aware: no noisy idle heartbeat once Discord is ready.
  */
-const { Events, Status } = require("discord.js");
-const { safeError, activeResourceSummary } = require("./utils/processDiagnostics.js");
 
-function describeToken(raw) {
-    if (raw == null || raw === "") {
-        return { ok: false, reason: "value is missing or empty" };
-    }
-    const trimmed = String(raw).trim().replace(/^["']|["']$/g, "");
-    if (!trimmed) {
-        return { ok: false, reason: "value is empty after trimming quotes/whitespace" };
-    }
-    if (trimmed.length < 50) {
-        return {
-            ok: false,
-            reason: `value looks too short (length ${trimmed.length})`
-        };
-    }
-    if (/\s/.test(trimmed)) {
-        return {
-            ok: false,
-            reason: "value contains whitespace; remove spaces/newlines"
-        };
-    }
-    // Discord bot tokens are typically three base64-ish segments
-    if (trimmed.split(".").length < 3) {
-        return {
-            ok: false,
-            reason: "value does not look like a Discord bot token (expected three dot-separated segments)"
-        };
-    }
-    return { ok: true, token: trimmed, length: trimmed.length };
-}
+const path = require("path");
+const {
+    attachProcessDiagnostics,
+    safeError,
+    activeResourceSummary
+} = require("./utils/processDiagnostics.js");
+
+attachProcessDiagnostics();
+
+// Preload heavy modules after diagnostics so failures are visible
+require("./utils/preloadDiag.js");
+
+const { Client, GatewayIntentBits, Partials, Collection } = require("discord.js");
+const fs = require("fs");
 
 function resolveBotToken() {
     const candidates = [
@@ -40,122 +24,109 @@ function resolveBotToken() {
         ["TOKEN", process.env.TOKEN],
         ["BOT_TOKEN", process.env.BOT_TOKEN]
     ];
-    const failures = [];
-    for (const [name, raw] of candidates) {
-        if (raw == null || String(raw).trim() === "") {
-            failures.push(`${name}=unset`);
-            continue;
-        }
-        const info = describeToken(raw);
-        if (info.ok) {
-            return { ok: true, token: info.token, length: info.length, envName: name };
-        }
-        failures.push(`${name}: ${info.reason}`);
+    for (const [envName, raw] of candidates) {
+        if (raw == null || raw === "") continue;
+        const token = String(raw).trim().replace(/^["']|["']$/g, "");
+        if (!token) continue;
+        return { ok: true, token, envName, length: token.length };
     }
     return {
         ok: false,
         reason:
-            "No usable Discord bot token found. Set DISCORD_TOKEN (preferred) to the Bot token from the Discord Developer Portal → Bot. Checked: " +
-            failures.join("; ")
+            "No Discord bot token found. Set DISCORD_TOKEN (preferred) in the host environment."
     };
-}
-
-function wsStatusLabel(client) {
-    const status = client?.ws?.status;
-    if (status === undefined || status === null) return "unknown";
-    const names = Status && typeof Status === "object" ? Object.entries(Status) : [];
-    for (const [name, val] of names) {
-        if (val === status) return `${name}(${status})`;
-    }
-    return String(status);
 }
 
 function isDiscordReady(client) {
     try {
-        if (typeof client.isReady === "function" && client.isReady()) return true;
+        if (typeof client?.isReady === "function") return client.isReady();
+        return Boolean(client?.readyAt || client?.user);
     } catch {
-        /* ignore */
+        return false;
     }
-    return Boolean(client.readyAt);
 }
 
-function attachClientDiagnostics(client) {
-    client.on(Events.Error, (error) => {
-        console.error("[DIAG] Discord client error:", JSON.stringify(safeError(error), null, 2));
-    });
-
-    client.on("warn", (message) => {
-        console.warn("[DIAG] Discord warn:", message);
-    });
-
-    client.on("shardError", (error, shardId) => {
-        console.error(
-            `[DIAG] Discord shardError (shard ${shardId}):`,
-            JSON.stringify(safeError(error), null, 2)
-        );
-    });
-
-    client.on("shardDisconnect", (event, shardId) => {
-        console.warn(
-            `[DIAG] Discord shardDisconnect (shard ${shardId}): code=${event?.code} reason=${event?.reason || "n/a"} wasClean=${event?.wasClean}`
-        );
-    });
-
-    client.on("shardReconnecting", (shardId) => {
-        console.log(`[DIAG] Discord shardReconnecting (shard ${shardId})…`);
-    });
-
-    client.on("shardResume", (shardId) => {
-        console.log(`[DIAG] Discord shardResume (shard ${shardId})`);
-    });
-
-    client.on("invalidated", () => {
-        console.error(
-            "[DIAG] Discord session invalidated (token reset/invalid). API stays up; fix DISCORD_TOKEN and restart."
-        );
-    });
-
-    // discord.js v14.14+ emits "clientReady"; older code used "ready"
-    const onReady = (readyClient) => {
-        const c = readyClient || client;
-        console.log("[DIAG] Discord ready event fired");
-        console.log("================================");
-        console.log("        OMNIBOT ONLINE");
-        console.log("================================");
-        console.log(`Logged in as: ${c.user?.tag || c.user?.username || "?"}`);
-        console.log(`Servers: ${c.guilds?.cache?.size ?? 0}`);
-        console.log("================================");
-    };
-    client.once(Events.ClientReady, onReady);
-    // Extra safety if Events.ClientReady mapping differs on the installed version
-    client.once("ready", onReady);
-    client.once("clientReady", onReady);
+function wsStatusLabel(client) {
+    try {
+        const s = client?.ws?.status;
+        return s == null ? "unknown" : String(s);
+    } catch {
+        return "unknown";
+    }
 }
 
-module.exports = function boot(client) {
-    let httpServer = null;
+async function start() {
+    const client = new Client({
+        intents: [
+            GatewayIntentBits.Guilds,
+            GatewayIntentBits.GuildMessages,
+            GatewayIntentBits.GuildMembers,
+            GatewayIntentBits.GuildModeration,
+            GatewayIntentBits.GuildMessageReactions,
+            GatewayIntentBits.MessageContent,
+            GatewayIntentBits.GuildVoiceStates
+        ],
+        partials: [
+            Partials.Channel,
+            Partials.Message,
+            Partials.Reaction,
+            Partials.GuildMember
+        ]
+    });
 
+    client.commands = new Collection();
+
+    // Load commands
+    const commandsPath = path.join(__dirname, "commands");
+    let commandCount = 0;
+    if (fs.existsSync(commandsPath)) {
+        for (const file of fs.readdirSync(commandsPath)) {
+            if (!file.endsWith(".js")) continue;
+            try {
+                const command = require(path.join(commandsPath, file));
+                if (command?.data?.name) {
+                    client.commands.set(command.data.name, command);
+                    commandCount++;
+                }
+            } catch (err) {
+                console.error(`[Commands] Failed to load ${file}:`, err?.message || err);
+            }
+        }
+    }
+    console.log(`✅ Loaded ${commandCount} command(s)`);
+
+    // Load events
+    const eventsPath = path.join(__dirname, "events");
+    let eventCount = 0;
+    if (fs.existsSync(eventsPath)) {
+        for (const file of fs.readdirSync(eventsPath)) {
+            if (!file.endsWith(".js")) continue;
+            try {
+                const event = require(path.join(eventsPath, file));
+                if (!event?.name || typeof event.execute !== "function") continue;
+                if (event.once) {
+                    client.once(event.name, (...args) => event.execute(...args));
+                } else {
+                    client.on(event.name, (...args) => event.execute(...args));
+                }
+                eventCount++;
+            } catch (err) {
+                console.error(`[Events] Failed to load ${file}:`, err?.message || err);
+            }
+        }
+    }
+    console.log(`✅ Loaded ${eventCount} event file(s)`);
+
+    // Start API (keeps process alive for Wispbyte PORT)
     try {
         const { startApiServer } = require("./api/server.js");
-        httpServer = startApiServer(client);
-        if (httpServer) {
-            global.__omnibotHttpServer = httpServer;
-            console.log("[DIAG] HTTP server handle stored; event loop should stay active");
-            console.log("[DIAG] resources after listen call:", JSON.stringify(activeResourceSummary()));
-        } else {
-            console.warn("[DIAG] HTTP server was not started (PORT missing or invalid?)");
-            console.warn(
-                `[DIAG] PORT raw type=${typeof process.env.PORT} finite=${Number.isFinite(Number(process.env.PORT))}`
-            );
-        }
+        await startApiServer(client);
     } catch (error) {
         console.error(
             "[DIAG] Failed to start API server at boot:",
             JSON.stringify(safeError(error), null, 2)
         );
     }
-
-    attachClientDiagnostics(client);
 
     const tokenInfo = resolveBotToken();
     if (!tokenInfo.ok) {
@@ -166,14 +137,18 @@ module.exports = function boot(client) {
         console.warn(
             "[DIAG] API listening without Discord login — bot will stay offline until a valid DISCORD_TOKEN is set and the process is restarted."
         );
-        // Heartbeat still useful so ops can see discord=not-ready
-        global.__omnibotHeartbeat = setInterval(() => {
-            console.log(
-                `[OmniBot] heartbeat: discord=not-ready guilds=0 apiListening=${Boolean(
-                    global.__omnibotHttpServer && global.__omnibotHttpServer.listening
-                )} (no token)`
-            );
-        }, 30 * 1000);
+        if (process.env.OMNIBOT_DEBUG === "1" || process.env.DEBUG_HEARTBEAT === "1") {
+            global.__omnibotHeartbeat = setInterval(() => {
+                console.log(
+                    `[OmniBot] heartbeat: discord=not-ready guilds=0 apiListening=${Boolean(
+                        global.__omnibotHttpServer && global.__omnibotHttpServer.listening
+                    )} (no token)`
+                );
+            }, 60 * 1000);
+            if (typeof global.__omnibotHeartbeat.unref === "function") {
+                global.__omnibotHeartbeat.unref();
+            }
+        }
         return;
     }
 
@@ -184,8 +159,15 @@ module.exports = function boot(client) {
     let loginSettled = false;
     let loginFailed = false;
 
+    const debugHb =
+        process.env.OMNIBOT_DEBUG === "1" || process.env.DEBUG_HEARTBEAT === "1";
     const heartbeat = setInterval(() => {
         const ready = isDiscordReady(client);
+        if (!debugHb && ready) {
+            clearInterval(heartbeat);
+            if (global.__omnibotHeartbeat === heartbeat) global.__omnibotHeartbeat = null;
+            return;
+        }
         const guilds = client.guilds?.cache?.size ?? 0;
         const listening =
             global.__omnibotHttpServer && global.__omnibotHttpServer.listening;
@@ -199,81 +181,39 @@ module.exports = function boot(client) {
                 "[DIAG] Login promise resolved but client is still not ready — gateway may be stuck. Check outbound network to Discord."
             );
         }
-    }, 30 * 1000);
+    }, debugHb ? 60 * 1000 : 30 * 1000);
+    if (typeof heartbeat.unref === "function") heartbeat.unref();
     global.__omnibotHeartbeat = heartbeat;
 
-    // Warn if login neither resolves nor rejects quickly
     const pendingTimer = setTimeout(() => {
         if (!loginSettled && !isDiscordReady(client)) {
             console.error(
-                "[DIAG] Discord client.login() has not settled after 20s. Common causes: invalid token (hangs rare), blocked outbound WebSocket to Discord, or host DNS/network issues."
-            );
-            console.error(
-                `[DIAG] ws=${wsStatusLabel(client)} readyAt=${Boolean(client.readyAt)} resources=${JSON.stringify(
-                    activeResourceSummary()
-                )}`
+                "[DIAG] Discord client.login() has not settled after 20s. Common causes: invalid token, blocked outbound WebSocket to Discord, or host DNS/network issues."
             );
         }
     }, 20_000);
+    if (typeof pendingTimer.unref === "function") pendingTimer.unref();
 
-    const readyWatch = setTimeout(() => {
-        if (!isDiscordReady(client)) {
-            console.error(
-                "[DIAG] Discord still not ready 45s after login attempt. Bot will remain offline until this is fixed."
-            );
-            console.error(
-                `[DIAG] ws=${wsStatusLabel(client)} loginSettled=${loginSettled} loginFailed=${loginFailed}`
-            );
-        }
-    }, 45_000);
-
-    let loginPromise;
     try {
-        loginPromise = client.login(tokenInfo.token);
-    } catch (error) {
+        await client.login(tokenInfo.token);
+        loginSettled = true;
+        console.log("✅ Discord login promise resolved");
+    } catch (err) {
         loginSettled = true;
         loginFailed = true;
-        clearTimeout(pendingTimer);
         console.error(
-            "❌ Discord login threw synchronously:",
-            JSON.stringify(safeError(error), null, 2)
+            "❌ Discord login failed:",
+            JSON.stringify(safeError(err), null, 2)
         );
-        return;
-    }
-
-    if (!loginPromise || typeof loginPromise.then !== "function") {
-        loginSettled = true;
-        loginFailed = true;
+        console.warn(
+            "[DIAG] API + heartbeat remain active after login failure — Discord bot is offline."
+        );
+    } finally {
         clearTimeout(pendingTimer);
-        console.error("❌ client.login() did not return a Promise — Discord client may be invalid.");
-        return;
     }
+}
 
-    loginPromise.then(
-        () => {
-            loginSettled = true;
-            clearTimeout(pendingTimer);
-            console.log("✅ Discord gateway login accepted (waiting for ready event)…");
-            console.log(
-                `[DIAG] post-login: ws=${wsStatusLabel(client)} ready=${isDiscordReady(client)} guilds=${client.guilds?.cache?.size ?? 0}`
-            );
-        },
-        (error) => {
-            loginSettled = true;
-            loginFailed = true;
-            clearTimeout(pendingTimer);
-            clearTimeout(readyWatch);
-            console.error(
-                "❌ Discord login failed:",
-                JSON.stringify(safeError(error), null, 2)
-            );
-            const msg = (error && error.message) || "";
-            if (/token/i.test(msg) || error?.code === "TokenInvalid" || error?.code === 4004) {
-                console.error(
-                    "[DIAG] Hint: Discord rejected the token. In the Discord Developer Portal → Bot → Reset Token, then set DISCORD_TOKEN on Wispbyte to the *bot* token (not the OAuth client secret)."
-                );
-            }
-            console.warn("[DIAG] API + heartbeat remain active after login failure — Discord bot is offline.");
-        }
-    );
-};
+start().catch((err) => {
+    console.error("[FATAL] startup failed:", JSON.stringify(safeError(err), null, 2));
+    console.error("[DIAG] resources:", JSON.stringify(activeResourceSummary()));
+});
