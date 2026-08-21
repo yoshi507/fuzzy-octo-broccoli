@@ -87,13 +87,17 @@ function createApiApp(discordClient) {
   app.use(express.json({ limit: '2mb' }));
 
   app.get('/health', (req, res) => {
-    const client = req.app.locals.discordClient;
+    const client = req.app.locals.discordClient || global.__omnibotClient || null;
     res.json({
       ok: true,
       service: 'OmniBot API',
       uptime: process.uptime(),
-      botReady: Boolean(client?.isReady?.() || client?.readyAt),
-      guilds: client?.guilds?.cache?.size ?? 0
+      botReady: Boolean(
+        client &&
+          (typeof client.isReady === 'function' ? client.isReady() : client.readyAt)
+      ),
+      guilds: client?.guilds?.cache?.size ?? 0,
+      tag: client?.user?.tag || null
     });
   });
 
@@ -102,8 +106,8 @@ function createApiApp(discordClient) {
   app.use('/guilds/:guildId/settings', settingsRoutes);
   app.use('/guilds/:guildId/persona', personaRoutes);
   app.use('/guilds/:guildId/features', featuresRoutes);
-  app.use('/bot', botRouter);
-  app.use('/stats', statsRouter);
+  app.use('/guilds/:guildId/bot', botRouter);
+  app.use('/guilds/:guildId/stats', statsRouter);
   app.use('/appeals', publicAppealsRoutes);
   app.use('/advertise', publicAdvertiseRoutes);
 
@@ -179,7 +183,10 @@ function startApiServer(discordClient) {
 }
 
 function setDiscordClient(discordClient) {
-  if (activeApp) activeApp.locals.discordClient = discordClient;
+  try {
+    if (discordClient) global.__omnibotClient = discordClient;
+  } catch (_) {}
+  if (activeApp) activeApp.locals.discordClient = discordClient || null;
 }
 
 module.exports = { startApiServer, createApiApp, setDiscordClient, loadTlsOptions };
