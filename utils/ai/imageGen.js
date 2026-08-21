@@ -1,22 +1,25 @@
 /**
- * Pollinations image generation (Flux only) — resource-safe for low-RAM hosts.
- * Uses the shared per-server AI daily limit + global generation queue.
+ * Pollinations Flux image generation — simple, logged, resource-safe.
+ * ONE job at a time via generationQueue.
  */
 
 const { canUseAI, useAI, getRemaining, DAILY_LIMIT } = require("./aiLimit.js");
-const { limitReachedMessage } = require("./groq.js");
 const {
     enqueueGeneration,
     QUEUE_WAIT_MESSAGE
 } = require("./generationQueue.js");
 
 const MODEL = "flux";
-/** Discord-friendly default — keeps RAM and bandwidth low on Wispbyte. */
 const DEFAULT_WIDTH = 512;
 const DEFAULT_HEIGHT = 512;
 const MAX_DIM = 512;
-const FETCH_TIMEOUT_MS = 45000;
-const MAX_IMAGE_BYTES = 4 * 1024 * 1024; // 4 MB hard cap
+const FETCH_TIMEOUT_MS = 90_000;
+const MAX_IMAGE_BYTES = 4 * 1024 * 1024;
+
+function logImg(msg, extra) {
+    if (extra !== undefined) console.log(`[ImageGen] ${msg}`, extra);
+    else console.log(`[ImageGen] ${msg}`);
+}
 
 function resolveApiKey() {
     const raw =
@@ -33,7 +36,7 @@ function clampDim(n, fallback) {
 }
 
 function buildImageUrl(prompt, opts = {}) {
-    const encoded = encodeURIComponent(String(prompt).trim().slice(0, 500));
+    const encoded = encodeURIComponent(String(prompt).trim().slice(0, 400));
     const width = clampDim(opts.width, DEFAULT_WIDTH);
     const height = clampDim(opts.height, DEFAULT_HEIGHT);
     const params = new URLSearchParams({
@@ -46,49 +49,39 @@ function buildImageUrl(prompt, opts = {}) {
     if (opts.seed != null && Number.isFinite(Number(opts.seed))) {
         params.set("seed", String(Math.floor(Number(opts.seed))));
     }
+    const key = resolveApiKey();
+    if (key) params.set("key", key);
     return `https://gen.pollinations.ai/image/${encoded}?${params.toString()}`;
 }
 
-async function readResponseLimited(res, maxBytes) {
-    if (!res.body || typeof res.body.getReader !== "function") {
-        const ab = await res.arrayBuffer();
-        if (ab.byteLength > maxBytes) {
-            const err = new Error("Image response too large");
-            err.code = "IMAGE_TOO_LARGE";
-            throw err;
-        }
-        return Buffer.from(ab);
-    }
+function looksLikeImage(buf) {
+    if (!buf || buf.length < 12) return false;
+    if (buf[0] === 0xff && buf[1] === 0xd8) return true;
+    if (buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47)
+        return true;
+    if (
+        buf[0] === 0x52 &&
+        buf[1] === 0x49 &&
+        buf[2] === 0x46 &&
+        buf[3] === 0x46 &&
+        buf[8] === 0x57 &&
+        buf[9] === 0x45
+    )
+        return true;
+    if (buf[0] === 0x47 && buf[1] === 0x49 && buf[2] === 0x46) return true;
+    return false;
+}
 
-    const reader = res.body.getReader();
-    const chunks = [];
-    let total = 0;
-    try {
-        while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            if (!value || !value.length) continue;
-            total += value.length;
-            if (total > maxBytes) {
-                try {
-                    await reader.cancel();
-                } catch {
-                    /* ignore */
-                }
-                const err = new Error("Image response too large");
-                err.code = "IMAGE_TOO_LARGE";
-                throw err;
-            }
-            chunks.push(Buffer.from(value));
-        }
-    } finally {
-        try {
-            reader.releaseLock();
-        } catch {
-            /* ignore */
-        }
+async function readBody(res, maxBytes) {
+    const ab = await res.arrayBuffer();
+    if (ab.byteLength > maxBytes) {
+        const err = new Error(
+            `Image response too large (${ab.byteLength} > ${maxBytes})`
+        );
+        err.code = "IMAGE_TOO_LARGE";
+        throw err;
     }
-    return Buffer.concat(chunks, total);
+    return Buffer.from(ab);
 }
 
 async function fetchFluxImage(prompt, opts = {}) {
@@ -96,13 +89,24 @@ async function fetchFluxImage(prompt, opts = {}) {
     if (!key) {
         const err = new Error("POLLINATIONS_API_KEY is not configured");
         err.code = "IMAGE_NOT_CONFIGURED";
+        logImg("FAIL: missing POLLINATIONS_API_KEY");
         throw err;
     }
 
-    const url = buildImageUrl(prompt, opts);
+    const cleaned = String(prompt || "").trim();
+    if (!cleaned) {
+        const err = new Error("Prompt is required");
+        err.code = "IMAGE_BAD_PROMPT";
+        throw err;
+    }
+
+    const url = buildImageUrl(cleaned, opts);
+    const safeUrl = url.replace(/([?&]key=)[^&]+/i, "$1***");
+    logImg(`request start ${safeUrl}`);
+
     const headers = {
         Authorization: `Bearer ${key}`,
-        Accept: "image/*"
+        Accept: "image/*,application/json"
     };
 
     const controller = new AbortController();
@@ -111,17 +115,21 @@ async function fetchFluxImage(prompt, opts = {}) {
     let res;
     try {
         res = await fetch(url, {
+            method: "GET",
             headers,
             redirect: "follow",
             signal: controller.signal
         });
     } catch (e) {
+        clearTimeout(timer);
         if (e?.name === "AbortError") {
+            logImg(`FAIL: timeout after ${FETCH_TIMEOUT_MS}ms`);
             const err = new Error("Image request timed out");
             err.code = "IMAGE_TIMEOUT";
             throw err;
         }
-        const err = new Error("Image provider request failed");
+        logImg(`FAIL: network error: ${e?.message || e}`);
+        const err = new Error(`Image provider request failed: ${e?.message || e}`);
         err.code = "IMAGE_PROVIDER_ERROR";
         err.cause = e;
         throw err;
@@ -129,8 +137,11 @@ async function fetchFluxImage(prompt, opts = {}) {
         clearTimeout(timer);
     }
 
+    const status = res.status;
+    const contentType = (res.headers.get("content-type") || "").split(";")[0];
+    logImg(`response status=${status} content-type=${contentType || "unknown"}`);
+
     if (!res.ok) {
-        const status = res.status;
         let bodyText = "";
         try {
             bodyText = await res.text();
@@ -139,38 +150,55 @@ async function fetchFluxImage(prompt, opts = {}) {
         }
         console.error(
             `[ImageGen] Pollinations HTTP ${status}:`,
-            String(bodyText).slice(0, 200)
+            String(bodyText).slice(0, 500)
         );
 
         if (status === 401 || status === 403) {
-            const err = new Error("Pollinations authentication failed");
+            const err = new Error(`Pollinations auth failed (HTTP ${status})`);
             err.code = "IMAGE_AUTH_FAILED";
             err.status = status;
             throw err;
         }
         if (status === 429) {
-            const err = new Error("Image provider rate limit");
+            const err = new Error(`Pollinations rate limit (HTTP ${status})`);
             err.code = "IMAGE_RATE_LIMIT";
             err.status = status;
             throw err;
         }
-
-        const err = new Error("Image generation failed");
+        const err = new Error(
+            `Pollinations HTTP ${status}: ${String(bodyText).slice(0, 200)}`
+        );
         err.code = "IMAGE_PROVIDER_ERROR";
         err.status = status;
         throw err;
     }
 
-    const contentType = (res.headers.get("content-type") || "image/jpeg").split(
-        ";"
-    )[0];
-    const buffer = await readResponseLimited(res, MAX_IMAGE_BYTES);
+    const buffer = await readBody(res, MAX_IMAGE_BYTES);
+    logImg(`downloaded ${buffer.length} bytes`);
+
     if (!buffer.length) {
         const err = new Error("Empty image response");
         err.code = "IMAGE_EMPTY";
         throw err;
     }
-    return { buffer, contentType };
+
+    if (!looksLikeImage(buffer)) {
+        const preview = buffer.toString("utf8", 0, 300);
+        console.error(`[ImageGen] response is not an image. preview=`, preview);
+        const err = new Error(
+            `Pollinations returned non-image data: ${preview.slice(0, 120)}`
+        );
+        err.code = "IMAGE_PROVIDER_ERROR";
+        throw err;
+    }
+
+    let ct = contentType || "image/jpeg";
+    if (buffer[0] === 0x89 && buffer[1] === 0x50) ct = "image/png";
+    else if (buffer[0] === 0xff && buffer[1] === 0xd8) ct = "image/jpeg";
+    else if (buffer[0] === 0x52 && buffer[1] === 0x49) ct = "image/webp";
+
+    logImg(`OK image ${ct} ${buffer.length} bytes`);
+    return { buffer, contentType: ct };
 }
 
 async function generateGuildImage(guildId, prompt, opts = {}) {
@@ -188,8 +216,6 @@ async function generateGuildImage(guildId, prompt, opts = {}) {
         throw err;
     }
 
-    const onQueued = opts.onQueued;
-
     return enqueueGeneration(
         async () => {
             if (guildId && !canUseAI(guildId)) {
@@ -199,48 +225,52 @@ async function generateGuildImage(guildId, prompt, opts = {}) {
                 throw err;
             }
 
+            logImg(`queued job start guild=${guildId || "n/a"}`);
             const result = await fetchFluxImage(cleaned, {
                 width: clampDim(opts.width, DEFAULT_WIDTH),
                 height: clampDim(opts.height, DEFAULT_HEIGHT),
                 seed: opts.seed
             });
 
-            if (guildId) {
-                useAI(guildId);
-            }
-
+            if (guildId) useAI(guildId);
+            logImg(`queued job done guild=${guildId || "n/a"}`);
             return result;
         },
         "image",
-        { onQueued }
+        { onQueued: opts.onQueued }
     );
 }
 
 function formatImageUserError(error) {
     if (!error) return "❌ Something went wrong generating the image.";
     if (error.code === "AI_DAILY_LIMIT") {
-        return limitReachedMessage(error.guildId);
+        try {
+            const { limitReachedMessage } = require("./groq.js");
+            return limitReachedMessage(error.guildId);
+        } catch {
+            return "❌ This server has reached its daily AI limit. Try again tomorrow.";
+        }
     }
     if (error.code === "IMAGE_NOT_CONFIGURED") {
-        return "❌ Image generation is not configured. An admin needs to set `POLLINATIONS_API_KEY`.";
+        return "❌ Image generation is not configured. Set `POLLINATIONS_API_KEY` on the host.";
     }
     if (error.code === "IMAGE_AUTH_FAILED") {
-        return "❌ Image API authentication failed. Check `POLLINATIONS_API_KEY` on the host.";
+        return "❌ Image API authentication failed. Check `POLLINATIONS_API_KEY`.";
     }
     if (error.code === "IMAGE_RATE_LIMIT") {
-        return "❌ The image service is rate-limited right now. Try again in a moment.";
+        return "❌ The image service is rate-limited. Try again in a moment.";
     }
     if (error.code === "IMAGE_BAD_PROMPT") {
         return "❌ Please provide a description of the image you want.";
     }
     if (error.code === "IMAGE_EMPTY") {
-        return "❌ The image service returned an empty result. Try a different prompt.";
+        return "❌ The image service returned an empty result.";
     }
     if (error.code === "IMAGE_TIMEOUT") {
         return "❌ Image generation timed out. Please try again.";
     }
     if (error.code === "IMAGE_TOO_LARGE") {
-        return "❌ The image was too large to process. Try a simpler prompt.";
+        return "❌ The image was too large to process.";
     }
     return "❌ Image generation failed. Please try again.";
 }
