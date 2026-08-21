@@ -1,134 +1,106 @@
 const fs = require("fs");
 const path = require("path");
 
-const dataDirectory =
-    path.join(__dirname, "../../data");
+const dataDirectory = path.join(__dirname, "../../data");
+const settingsFile = path.join(dataDirectory, "dead-chat-settings.json");
 
-const settingsFile =
-    path.join(
-        dataDirectory,
-        "dead-chat-settings.json"
-    );
+let memCache = null;
+let saveTimer = null;
+let dirty = false;
 
 function ensureStorage() {
-
     if (!fs.existsSync(dataDirectory)) {
-        fs.mkdirSync(dataDirectory, {
-            recursive: true
-        });
+        fs.mkdirSync(dataDirectory, { recursive: true });
     }
-
     if (!fs.existsSync(settingsFile)) {
-        fs.writeFileSync(
-            settingsFile,
-            "{}",
-            "utf8"
-        );
+        fs.writeFileSync(settingsFile, "{}", "utf8");
     }
 }
 
 function loadSettings() {
-
+    if (memCache) return memCache;
     ensureStorage();
-
     try {
-
-        return JSON.parse(
-            fs.readFileSync(
-                settingsFile,
-                "utf8"
-            )
-        );
-
+        memCache = JSON.parse(fs.readFileSync(settingsFile, "utf8"));
     } catch {
-
-        return {};
+        memCache = {};
     }
+    return memCache;
+}
+
+function flushSettings() {
+    if (!dirty || !memCache) return;
+    ensureStorage();
+    try {
+        fs.writeFileSync(settingsFile, JSON.stringify(memCache, null, 2));
+        dirty = false;
+    } catch (e) {
+        console.error("[DeadChat] save failed:", e?.message || e);
+    }
+}
+
+function scheduleSave() {
+    dirty = true;
+    if (saveTimer) return;
+    saveTimer = setTimeout(() => {
+        saveTimer = null;
+        flushSettings();
+    }, 2000);
+    if (typeof saveTimer.unref === "function") saveTimer.unref();
 }
 
 function saveSettings(settings) {
-
-    ensureStorage();
-
-    fs.writeFileSync(
-        settingsFile,
-        JSON.stringify(
-            settings,
-            null,
-            2
-        ),
-        "utf8"
-    );
+    memCache = settings;
+    dirty = true;
+    flushSettings();
 }
 
 function getSettings(channelId) {
-
-    const settings =
-        loadSettings();
-
+    const settings = loadSettings();
     return settings[channelId] || null;
 }
 
-function setSettings(
-    channelId,
-    settings
-) {
-
-    const all =
-        loadSettings();
-
-    all[channelId] =
-        settings;
-
-    saveSettings(all);
+function setSettings(channelId, settings) {
+    const all = loadSettings();
+    all[channelId] = settings;
+    scheduleSave();
+    try {
+        const { notifyDeadChatConfigChanged } = require("./deadChatRunner.js");
+        if (typeof notifyDeadChatConfigChanged === "function") {
+            notifyDeadChatConfigChanged();
+        }
+    } catch {
+        /* runner may not be loaded yet */
+    }
 }
 
 function disable(channelId) {
-
-    const all =
-        loadSettings();
-
+    const all = loadSettings();
     delete all[channelId];
-
-    saveSettings(all);
+    scheduleSave();
+    try {
+        const { notifyDeadChatConfigChanged } = require("./deadChatRunner.js");
+        if (typeof notifyDeadChatConfigChanged === "function") {
+            notifyDeadChatConfigChanged();
+        }
+    } catch {
+        /* ignore */
+    }
 }
 
-function addTopic(
-    channelId,
-    topic
-) {
-
-    const all =
-        loadSettings();
-
-    if (!all[channelId]) {
-        all[channelId] = {};
-    }
-
-    if (!Array.isArray(
-        all[channelId].topics
-    )) {
-        all[channelId].topics = [];
-    }
-
+function addTopic(channelId, topic) {
+    const all = loadSettings();
+    if (!all[channelId]) all[channelId] = {};
+    if (!Array.isArray(all[channelId].topics)) all[channelId].topics = [];
     all[channelId].topics.push(topic);
-
-    if (
-        all[channelId].topics.length > 25
-    ) {
-
-        all[channelId].topics =
-            all[channelId].topics.slice(-25);
+    if (all[channelId].topics.length > 25) {
+        all[channelId].topics = all[channelId].topics.slice(-25);
     }
-
-    saveSettings(all);
+    scheduleSave();
 }
 
 function getTopics(channelId) {
-
-    const settings =
-        getSettings(channelId);
-
+    const settings = getSettings(channelId);
     return settings?.topics || [];
 }
 
@@ -151,9 +123,18 @@ function listEnabledChannels() {
 
 function touchActivity(channelId) {
     const all = loadSettings();
-    if (!all[channelId] || !all[channelId].enabled) return;
+    if (!all[channelId] || !all[channelId].enabled) return false;
     all[channelId].lastActivity = Date.now();
-    saveSettings(all);
+    scheduleSave();
+    try {
+        const { notifyDeadChatActivity } = require("./deadChatRunner.js");
+        if (typeof notifyDeadChatActivity === "function") {
+            notifyDeadChatActivity(channelId);
+        }
+    } catch {
+        /* ignore */
+    }
+    return true;
 }
 
 module.exports = {
@@ -163,5 +144,6 @@ module.exports = {
     addTopic,
     getTopics,
     listEnabledChannels,
-    touchActivity
+    touchActivity,
+    flushSettings
 };
