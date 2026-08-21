@@ -74,11 +74,33 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return;
     }
 
-    // Ticket + suggestion buttons and slash commands remain handled below / in event files
     if (!interaction.isChatInputCommand()) return;
 
     const command = client.commands.get(interaction.commandName);
     if (!command) return;
+
+    // Defense-in-depth: enforce defaultMemberPermissions even if Discord UI is bypassed
+    try {
+        const { memberHasCommandPermission } = require("./utils/textCommands.js");
+        if (
+            interaction.inGuild() &&
+            interaction.member &&
+            !memberHasCommandPermission(interaction.member, command)
+        ) {
+            const payload = {
+                content: "❌ You don't have permission to use that command.",
+                ephemeral: true
+            };
+            if (interaction.deferred || interaction.replied) {
+                await interaction.followUp(payload).catch(() => {});
+            } else {
+                await interaction.reply(payload).catch(() => {});
+            }
+            return;
+        }
+    } catch (permErr) {
+        console.warn("[perms] check failed:", permErr?.message || permErr);
+    }
 
     try {
         await command.execute(interaction);
