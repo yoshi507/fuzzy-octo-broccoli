@@ -23,10 +23,10 @@ a{color:var(--accent);text-decoration:none}button,input,select,textarea{font:inh
 .main{padding:1.5rem;max-width:1100px}
 .topbar{display:flex;justify-content:space-between;align-items:center;gap:1rem;margin-bottom:1.25rem;flex-wrap:wrap}
 .card{background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);padding:1.25rem;margin-bottom:1rem;box-shadow:var(--shadow)}
-.card h2{margin:0 0 .35rem;font-size:1.15rem}.card p.help{margin:.25rem 0 1rem;color:var(--muted);font-size:.9rem}
+.card h2{margin:0 0 .35rem;font-size:1.15rem}.card p.help{margin:0 0 1rem;color:var(--muted);font-size:.9rem}
 .grid2{display:grid;grid-template-columns:1fr 1fr;gap:1rem}
 label{display:block;font-size:.85rem;color:var(--muted);margin-bottom:.35rem}
-input[type=text],input[type=number],select,textarea{width:100%;background:var(--panel2);border:1px solid var(--border);border-radius:8px;color:var(--text);padding:.65rem .75rem}
+input,select,textarea{width:100%;background:var(--panel2);border:1px solid var(--border);border-radius:8px;color:var(--text);padding:.65rem .75rem}
 textarea{min-height:120px;resize:vertical}
 .row{display:flex;gap:.75rem;flex-wrap:wrap;align-items:center}
 .toast{position:fixed;right:1rem;bottom:1rem;background:var(--panel2);border:1px solid var(--border);padding:.85rem 1rem;border-radius:10px;max-width:360px;z-index:50;box-shadow:var(--shadow)}
@@ -58,5 +58,6 @@ code{background:var(--panel2);padding:.1rem .35rem;border-radius:4px;font-size:.
 <div id="app"></div>
 <div id="toast" class="toast hidden"></div>
 <script src="/dashboard.js"></script>
+<script src="/advertise-page.js"></script>
 </body>
 </html>
