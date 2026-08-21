@@ -88,9 +88,26 @@ function settingVal(id) {
 /** Canonical redirect — must match Discord Developer Portal exactly. */
 function redirectUri() {
   if (state.oauth && state.oauth.redirectUri) {
-    return String(state.oauth.redirectUri);
+    return String(state.oauth.redirectUri).trim();
   }
   return String(window.location.origin || '').replace(/\/$/, '') + '/';
+}
+
+/** Same redirect used at authorize time (prevents invalid_request / invalid code). */
+function redirectUriForExchange() {
+  try {
+    var stored = sessionStorage.getItem('omnibot_oauth_redirect');
+    if (stored) return stored;
+  } catch (e) {}
+  return redirectUri();
+}
+
+function clearOAuthQueryFromUrl() {
+  try {
+    var clean = window.location.pathname || '/';
+    if (window.location.hash) clean += window.location.hash;
+    window.history.replaceState({}, '', clean);
+  } catch (e) {}
 }
 
 async function loadOAuthConfig() {
@@ -106,11 +123,19 @@ function startLogin(intent) {
   localStorage.setItem(INTENT_KEY, intent);
   state.mode = intent;
   state.oauthError = null;
+  try {
+    var t = document.getElementById('toast');
+    if (t) t.classList.add('hidden');
+  } catch (e) {}
   const clientId = (state.oauth && state.oauth.clientId) || '1538542627882799155';
+  const redir = redirectUri();
+  try {
+    sessionStorage.setItem('omnibot_oauth_redirect', redir);
+  } catch (e) {}
   const url = new URL('https://discord.com/api/oauth2/authorize');
   url.searchParams.set('client_id', clientId);
   url.searchParams.set('response_type', 'code');
-  url.searchParams.set('redirect_uri', redirectUri());
+  url.searchParams.set('redirect_uri', redir);
   url.searchParams.set('scope', 'identify guilds');
   url.searchParams.set('prompt', 'consent');
   window.location.href = url.toString();
@@ -120,35 +145,75 @@ async function handleOAuthCallback() {
   const params = new URLSearchParams(window.location.search);
   const err = params.get('error');
   const errDesc = params.get('error_description');
+  const code = params.get('code');
+
+  if (!err && !code) return;
+
+  // Strip OAuth params immediately so refresh cannot re-use the code
+  clearOAuthQueryFromUrl();
+
   if (err) {
-    state.oauthError =
-      errDesc ||
-      err ||
-      'Discord login failed. Check that the redirect URL is registered in the Discord Developer Portal.';
-    if (err === 'invalid_request') {
-      state.oauthError =
-        'Discord rejected the login (invalid_request). Add this exact Redirect URL in the Discord Developer Portal → OAuth2 → Redirects:\n' +
-        redirectUri();
+    if (state.token) {
+      state.oauthError = null;
+      return;
     }
-    window.history.replaceState({}, '', window.location.pathname || '/');
+    var msg = errDesc || err || 'Discord login failed.';
+    if (err === 'invalid_request') {
+      msg =
+        'Discord rejected the login redirect. In the Discord Developer Portal → OAuth2 → Redirects, add exactly:\n' +
+        redirectUriForExchange();
+    }
+    state.oauthError = msg;
     return;
   }
-  const code = params.get('code');
+
   if (!code) return;
+
+  var codeKey = 'omnibot_oauth_code_' + code;
+  try {
+    if (sessionStorage.getItem(codeKey) === 'used') {
+      state.oauthError = null;
+      return;
+    }
+    sessionStorage.setItem(codeKey, 'used');
+  } catch (e) {}
+
+  if (state.token) {
+    state.oauthError = null;
+    return;
+  }
+
   try {
     const data = await api('/auth/callback', {
       method: 'POST',
-      body: JSON.stringify({ code: code, redirectUri: redirectUri() })
+      body: JSON.stringify({
+        code: code,
+        redirectUri: redirectUriForExchange()
+      })
     });
     var tok = (data && (data.token || data.accessToken)) || null;
     if (tok) {
       state.token = tok;
       localStorage.setItem(TOKEN_KEY, tok);
+      state.oauthError = null;
+      try {
+        sessionStorage.removeItem('omnibot_oauth_redirect');
+        var t = document.getElementById('toast');
+        if (t) t.classList.add('hidden');
+      } catch (e) {}
+    } else {
+      state.oauthError = 'Login succeeded but no session token was returned. Please try again.';
     }
-    window.history.replaceState({}, '', window.location.pathname || '/');
   } catch (e) {
-    state.oauthError = e.message || 'Login failed';
-    window.history.replaceState({}, '', window.location.pathname || '/');
+    var m = (e && e.message) || 'Login failed';
+    if (/invalid.?code|invalid_grant|already been used/i.test(m)) {
+      if (state.token) {
+        state.oauthError = null;
+        return;
+      }
+      m = 'Login code was already used or expired. Click Open Dashboard again to sign in.';
+    }
+    state.oauthError = m;
   }
 }
 
@@ -259,6 +324,7 @@ async function logout() {
   state.token = null; state.user = null; state.guild = null; state.guilds = [];
   state.appealForm = null; state.appealGuild = null; state.appealDirectory = [];
   state.mode = 'dashboard';
+  state.oauthError = null;
   localStorage.removeItem(TOKEN_KEY); localStorage.removeItem(GUILD_KEY); localStorage.removeItem(INTENT_KEY);
   render();
 }
