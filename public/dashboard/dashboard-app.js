@@ -1,3 +1,12 @@
+function siteFooter() {
+  return (
+    '<div class="site-footer" style="margin-top:2rem;padding:1.25rem 1rem 1.5rem;text-align:center;border-top:1px solid var(--border)">' +
+    '<a class="btn ghost sm" style="display:inline-block" href="https://discord.gg/WpdH42HShV" target="_blank" rel="noopener">Join our Discord</a>' +
+    '<p class="status" style="margin-top:.75rem"><a href="/tos">Terms of Service</a> · <a href="/privacy-policy">Privacy Policy</a></p>' +
+    '</div>'
+  );
+}
+
 function renderLogin() {
   var err = (!state.token && state.oauthError)
     ? '<p class="help" style="color:var(--err);white-space:pre-wrap;margin-bottom:1rem">' + escapeHtml(state.oauthError) + '</p>'
@@ -13,7 +22,8 @@ function renderLogin() {
     '<button type="button" class="btn ghost" id="btnAppealPunishment" style="width:100%;margin-bottom:.75rem" onclick="startLogin(\'appeals\')">Appeal a punishment</button>' +
     '<button type="button" class="btn ghost" id="btnAdvertise" style="width:100%">Advertise</button>' +
     '<p class="status" style="margin-top:1rem">API: same-origin · <a href="/health" target="_blank">/health</a></p>' +
-    '<p class="status" style="margin-top:.75rem"><a href="/tos">Terms of Service</a> · <a href="/privacy-policy">Privacy Policy</a></p></div></div>';
+    siteFooter() +
+    '</div></div>';
 }
 
 function renderServerSelect() {
@@ -39,7 +49,7 @@ function renderAppealSelect() {
     return '<div class="guild" data-appeal-id="' + escapeAttr(g.id) + '">' + icon +
       '<div><div style="font-weight:600">' + escapeHtml(g.name || g.id) + '</div><div class="status">Click to open appeal form</div></div></div>';
   }).join('') || '<p class="help">No servers with appeals enabled were found. Try again later (list refreshes hourly).</p>';
-  return '<div class="center"><div style="width:min(720px,100%)"><div class="card"><h2>Appeal a punishment</h2><p class="help">Search for the server, then fill in the appeal form. You do not need to still be a member.</p>' +
+  return '<div class="center"><div style="width:min(720px,100%)"><div class="card"><h2>Appeal a punishment</h2><p class="help">Search for the server, then fill in the appeal form.</p>' +
     '<div class="field"><label>Search</label><input type="search" id="appealSearch" value="' + escapeAttr(state.appealSearch || '') + '" placeholder="Server name…"/></div>' +
     '<div class="guild-grid">' + cards + '</div>' +
     '<div class="row" style="margin-top:1rem"><button class="btn ghost" id="btnBackHome">Back</button><button class="btn ghost" id="btnLogout">Log out</button></div></div></div></div>';
@@ -49,7 +59,7 @@ function renderAppealFormView() {
   var form = state.appealForm || {};
   var g = state.appealGuild || {};
   if (form.openAppealId) {
-    return '<div class="center"><div class="card login-card"><h2>Appeal already open</h2><p class="help">You already have open appeal <code>' + escapeHtml(form.openAppealId) + '</code> on <strong>' + escapeHtml(form.guildName || g.name || 'this server') + '</strong>.</p><div class="row"><button class="btn" id="btnBackAppealList">Back to servers</button><button class="btn ghost" id="btnLogout">Log out</button></div></div></div>';
+    return '<div class="center"><div class="card login-card"><h2>Appeal already open</h2><p class="help">You already have open appeal <code>' + escapeHtml(form.openAppealId) + '</code>.</p><div class="row"><button class="btn" id="btnBackAppealList">Back to servers</button><button class="btn ghost" id="btnLogout">Log out</button></div></div></div>';
   }
   var questions = Array.isArray(form.questions) ? form.questions : [
     { id: 'why', label: 'Why should this punishment be removed?', required: true },
@@ -61,7 +71,6 @@ function renderAppealFormView() {
   }).join('');
   return '<div class="center"><div style="width:min(640px,100%)"><div class="card">' +
     '<h2 style="margin:0 0 .5rem">Appeal — ' + escapeHtml(form.guildName || g.name || 'Server') + '</h2>' +
-    '<p class="status">Choose the punishment type, then answer the questions.</p>' +
     '<div class="field"><label>Punishment type</label><select id="appealType"><option value="ban">Ban</option><option value="timeout">Timeout / Mute</option><option value="warn">Warning</option></select></div>' +
     fields +
     '<div class="row"><button class="btn" id="btnSubmitAppeal">Submit appeal</button><button class="btn ghost" id="btnBackAppealList">Back</button></div></div></div></div>';
@@ -118,7 +127,7 @@ function renderSection() {
       return '<div class="card"><h2>Account</h2><p class="status">Logged in as <strong>' + escapeHtml(u.username || u.id || '—') + '</strong></p><button class="btn ghost" id="btnLogout">Log out</button></div>';
     }
     default:
-      return renderOverview() + '<div class="card"><p class="help">More controls for this section are available via Discord commands (<code>/help</code>).</p></div>';
+      return renderOverview() + '<div class="card"><p class="help">More controls available via Discord commands (<code>/help</code>).</p></div>';
   }
 }
 
@@ -131,20 +140,12 @@ function renderDashboard() {
 function bind() {
   var root = document.getElementById('app');
   if (!root) return;
-
   function on(sel, evt, fn) {
     var el = root.querySelector(sel);
     if (el) el.addEventListener(evt, fn);
   }
-
-  on('#btnOpenDashboard', 'click', function (e) {
-    e.preventDefault();
-    startLogin('dashboard');
-  });
-  on('#btnAppealPunishment', 'click', function (e) {
-    e.preventDefault();
-    startLogin('appeals');
-  });
+  on('#btnOpenDashboard', 'click', function (e) { e.preventDefault(); startLogin('dashboard'); });
+  on('#btnAppealPunishment', 'click', function (e) { e.preventDefault(); startLogin('appeals'); });
   on('#btnBackHome', 'click', function () {
     state.mode = 'dashboard';
     localStorage.setItem(INTENT_KEY, 'dashboard');
@@ -157,7 +158,6 @@ function bind() {
     state.appealGuild = null;
     render();
   });
-
   var search = root.querySelector('#appealSearch');
   if (search) {
     search.addEventListener('input', function () {
@@ -165,24 +165,15 @@ function bind() {
       var pos = search.selectionStart;
       render();
       var el = document.getElementById('appealSearch');
-      if (el) {
-        el.focus();
-        try { el.setSelectionRange(pos, pos); } catch (e) {}
-      }
+      if (el) { el.focus(); try { el.setSelectionRange(pos, pos); } catch (e) {} }
     });
   }
-
   root.querySelectorAll('[data-appeal-id]').forEach(function (el) {
     el.addEventListener('click', async function () {
-      try {
-        await loadAppealForm(el.getAttribute('data-appeal-id'));
-        render();
-      } catch (e) {
-        toast(e.message || 'Failed to load form', 'err');
-      }
+      try { await loadAppealForm(el.getAttribute('data-appeal-id')); render(); }
+      catch (e) { toast(e.message || 'Failed to load form', 'err'); }
     });
   });
-
   on('#btnSubmitAppeal', 'click', async function () {
     if (!state.appealForm || state.appealSubmitting) return;
     var answers = {};
@@ -201,48 +192,35 @@ function bind() {
       state.appealForm = null;
       state.appealGuild = null;
       render();
-    } catch (e) {
-      toast(e.message || 'Submit failed', 'err');
-    } finally {
-      state.appealSubmitting = false;
-    }
+    } catch (e) { toast(e.message || 'Submit failed', 'err'); }
+    finally { state.appealSubmitting = false; }
   });
-
   root.querySelectorAll('#btnLogout').forEach(function (b) {
     b.addEventListener('click', function () { logout(); });
   });
-
   root.querySelectorAll('.guild[data-id]').forEach(function (el) {
     el.addEventListener('click', async function () {
       var id = el.getAttribute('data-id');
       state.guild = state.guilds.find(function (g) { return String(g.id) === String(id); });
       if (state.guild) {
         localStorage.setItem(GUILD_KEY, JSON.stringify(state.guild));
-        try {
-          await loadGuildData();
-          state.section = 'overview';
-          render();
-        } catch (e) {
-          toast(e.message || 'Failed to load server', 'err');
-        }
+        try { await loadGuildData(); state.section = 'overview'; render(); }
+        catch (e) { toast(e.message || 'Failed to load server', 'err'); }
       }
     });
   });
-
   on('#btnChangeServer', 'click', function () {
     state.guild = null;
     localStorage.removeItem(GUILD_KEY);
     render();
   });
   on('#btnRefresh', 'click', function () { refreshGuildData(false); });
-
   root.querySelectorAll('[data-section]').forEach(function (btn) {
     btn.addEventListener('click', function () {
       state.section = btn.getAttribute('data-section') || 'overview';
       render();
     });
   });
-
   root.querySelectorAll('.btnSaveSettings').forEach(function (btn) {
     btn.addEventListener('click', async function () {
       try {
@@ -255,23 +233,15 @@ function bind() {
           else patch[id] = el.value === '' ? null : el.value;
         });
         await saveSettings(patch);
-      } catch (e) {
-        toast(e.message || 'Save failed', 'err');
-      }
+      } catch (e) { toast(e.message || 'Save failed', 'err'); }
     });
   });
-
   on('#btnSavePersona', 'click', async function () {
     try {
       var pEl = document.getElementById('pPersonality');
       var tEl = document.getElementById('pTone');
-      await savePersona({
-        personality: pEl ? pEl.value : '',
-        tone: tEl ? tEl.value : 'chill'
-      });
-    } catch (e) {
-      toast(e.message || 'Save failed', 'err');
-    }
+      await savePersona({ personality: pEl ? pEl.value : '', tone: tEl ? tEl.value : 'chill' });
+    } catch (e) { toast(e.message || 'Save failed', 'err'); }
   });
   on('#btnResetPersona', 'click', function () {
     resetPersona().catch(function (e) { toast(e.message, 'err'); });
@@ -282,7 +252,7 @@ function render() {
   var root = document.getElementById('app');
   if (!root) return;
   if (state.mode === 'advertise' && typeof renderAdvertise === 'function') {
-    root.innerHTML = renderAdvertise();
+    root.innerHTML = renderAdvertise() + siteFooter();
     bind();
     return;
   }
@@ -292,12 +262,12 @@ function render() {
     return;
   }
   if (state.mode === 'appeals') {
-    if (state.appealForm) root.innerHTML = renderAppealFormView();
-    else root.innerHTML = renderAppealSelect();
+    if (state.appealForm) root.innerHTML = renderAppealFormView() + siteFooter();
+    else root.innerHTML = renderAppealSelect() + siteFooter();
   } else if (!state.guild) {
-    root.innerHTML = renderServerSelect();
+    root.innerHTML = renderServerSelect() + siteFooter();
   } else {
-    root.innerHTML = renderDashboard();
+    root.innerHTML = renderDashboard() + siteFooter();
   }
   bind();
 }
@@ -310,10 +280,7 @@ async function boot() {
       try {
         await loadMe();
         state.oauthError = null;
-        try {
-          var t = document.getElementById('toast');
-          if (t) t.classList.add('hidden');
-        } catch (e) {}
+        try { var t = document.getElementById('toast'); if (t) t.classList.add('hidden'); } catch (e) {}
         var intent = localStorage.getItem(INTENT_KEY) || 'dashboard';
         state.mode = intent === 'appeals' ? 'appeals' : (intent === 'advertise' ? 'advertise' : 'dashboard');
         if (state.mode === 'appeals') {
@@ -322,13 +289,8 @@ async function boot() {
           await loadGuilds();
           if (state.guild) {
             var still = state.guilds.find(function (g) { return String(g.id) === String(state.guild.id); });
-            if (!still) {
-              state.guild = null;
-              localStorage.removeItem(GUILD_KEY);
-            } else {
-              state.guild = still;
-              await loadGuildData();
-            }
+            if (!still) { state.guild = null; localStorage.removeItem(GUILD_KEY); }
+            else { state.guild = still; await loadGuildData(); }
           } else if (state.guilds.length === 1) {
             state.guild = state.guilds[0];
             localStorage.setItem(GUILD_KEY, JSON.stringify(state.guild));
@@ -337,15 +299,9 @@ async function boot() {
         }
       } catch (e) {
         var msg = e.message || 'Session error';
-        if (state.token && /invalid_request|invalid.?code|invalid_grant/i.test(msg)) {
-          state.oauthError = null;
-        } else {
-          toast(msg, 'err');
-        }
-        if (e.status === 401) {
-          state.token = null;
-          localStorage.removeItem(TOKEN_KEY);
-        }
+        if (!(state.token && /invalid_request|invalid.?code|invalid_grant/i.test(msg))) toast(msg, 'err');
+        else state.oauthError = null;
+        if (e.status === 401) { state.token = null; localStorage.removeItem(TOKEN_KEY); }
       }
     }
   } catch (e) {
@@ -362,14 +318,10 @@ async function boot() {
 
 if (!window.__omnibotSyncTimer) {
   window.__omnibotSyncTimer = setInterval(function () {
-    if (state.token && state.guild && document.visibilityState === 'visible') {
-      refreshGuildData(true);
-    }
+    if (state.token && state.guild && document.visibilityState === 'visible') refreshGuildData(true);
   }, 30000);
 }
 document.addEventListener('visibilitychange', function () {
-  if (document.visibilityState === 'visible' && state.token && state.guild && !isTyping()) {
-    refreshGuildData(true);
-  }
+  if (document.visibilityState === 'visible' && state.token && state.guild && !isTyping()) refreshGuildData(true);
 });
 boot();
