@@ -8,9 +8,15 @@ const router = express.Router();
 /** Public OAuth config for the dashboard (never exposes client secret). */
 router.get('/config', (req, res) => {
   const clientId = process.env.DISCORD_CLIENT_ID || null;
+  // Preferred redirect — must match Discord Developer Portal exactly
+  const redirectUri =
+    process.env.DISCORD_REDIRECT_URI ||
+    process.env.OAUTH_REDIRECT_URI ||
+    null;
   res.json({
     clientId,
     scopes: ['identify', 'guilds'],
+    redirectUri,
     configured: Boolean(clientId && process.env.DISCORD_CLIENT_SECRET)
   });
 });
