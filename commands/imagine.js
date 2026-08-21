@@ -14,7 +14,6 @@ function normalizeTypeAndPrompt(interaction) {
     let type = (interaction.options.getString("type") || "image").toLowerCase();
     let prompt = interaction.options.getString("prompt") || "";
 
-    // Text path: "!imagine a sunset" → type token may be first word of prompt
     if (type !== "image" && type !== "video") {
         prompt = `${type} ${prompt}`.trim();
         type = "image";
@@ -78,16 +77,44 @@ module.exports = {
 
         try {
             if (type === "video") {
-                const { buffer } = await generateGuildVideo(
-                    interaction.guild.id,
-                    prompt
-                );
+                let lastEdit = 0;
+                const onProgress = async (done, total) => {
+                    const now = Date.now();
+                    if (done < total && now - lastEdit < 3000) return;
+                    lastEdit = now;
+                    const text =
+                        done >= total
+                            ? "🎬 Rendering video…"
+                            : `🎬 Generating video... **${done}/${total}** frames`;
+                    try {
+                        if (interaction.deferred || interaction.replied) {
+                            await interaction.editReply({ content: text });
+                        }
+                    } catch {
+                        /* ignore */
+                    }
+                };
+
+                try {
+                    await interaction.editReply({
+                        content: "🎬 Generating video... **0/** frames"
+                    });
+                } catch {
+                    /* ignore */
+                }
+
+                const { buffer, frameCount, fps, durationSeconds } =
+                    await generateGuildVideo(interaction.guild.id, prompt, {
+                        onProgress
+                    });
+
                 const file = new AttachmentBuilder(buffer, {
                     name: "omni-video.mp4"
                 });
                 const remaining = getRemaining(interaction.guild.id);
                 const content =
-                    `🎬 **Video** (Flux + ffmpeg) · \`${prompt.slice(0, 120)}${prompt.length > 120 ? "…" : ""}\`\n` +
+                    `🎬 **Video generated!** (${frameCount || "?"} frames · ${fps || 12} fps · ~${durationSeconds || 5}s)\n` +
+                    `\`${prompt.slice(0, 120)}${prompt.length > 120 ? "…" : ""}\`\n` +
                     `_AI requests left today: **${remaining}/${DAILY_LIMIT}**_`;
 
                 if (interaction.deferred || interaction.replied) {

@@ -1,6 +1,7 @@
 /**
- * Short video generation: Flux still → ffmpeg Ken Burns MP4.
- * Consumes one AI request on success (shared daily limit).
+ * Video generation for OmniBot.
+ * Primary: multi-frame Pollinations stills + FFmpeg stitch (real frame changes).
+ * Legacy: single Flux still + FFmpeg Ken Burns (kept for emergency fallback).
  */
 
 const fs = require("fs");
@@ -12,11 +13,16 @@ const {
     formatImageUserError
 } = require("./imageGen.js");
 const { canUseAI, useAI, getRemaining, DAILY_LIMIT } = require("./aiLimit.js");
+const {
+    generateFrameBasedVideo,
+    DEFAULT_CONFIG,
+    TEST_CONFIG
+} = require("./frameVideoGen.js");
 
-const VIDEO_SECONDS = 5;
-const FPS = 24;
-const WIDTH = 960;
-const HEIGHT = 540;
+const LEGACY_VIDEO_SECONDS = 5;
+const LEGACY_FPS = 24;
+const LEGACY_WIDTH = 960;
+const LEGACY_HEIGHT = 540;
 
 function runFfmpeg(args, timeoutMs = 90000) {
     return new Promise((resolve, reject) => {
@@ -63,25 +69,20 @@ function runFfmpeg(args, timeoutMs = 90000) {
     });
 }
 
-/**
- * Animate a still image into a short MP4 with a slow zoom (Ken Burns).
- * @param {Buffer} imageBuffer
- * @returns {Promise<Buffer>} mp4 bytes
- */
+/** @deprecated Legacy single-image zoom — kept for emergency fallback only. */
 async function imageBufferToVideo(imageBuffer) {
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "omni-vid-"));
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "omni-vid-legacy-"));
     const extGuess = imageBuffer[0] === 0x89 ? "png" : "jpg";
     const inPath = path.join(tmpDir, `still.${extGuess}`);
     const outPath = path.join(tmpDir, "out.mp4");
 
     try {
         fs.writeFileSync(inPath, imageBuffer);
-
-        const frames = VIDEO_SECONDS * FPS;
+        const frames = LEGACY_VIDEO_SECONDS * LEGACY_FPS;
         const vf = [
-            `scale=${WIDTH}:${HEIGHT}:force_original_aspect_ratio=increase`,
-            `crop=${WIDTH}:${HEIGHT}`,
-            `zoompan=z='min(zoom+0.0012,1.25)':d=${frames}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=${WIDTH}x${HEIGHT}:fps=${FPS}`,
+            `scale=${LEGACY_WIDTH}:${LEGACY_HEIGHT}:force_original_aspect_ratio=increase`,
+            `crop=${LEGACY_WIDTH}:${LEGACY_HEIGHT}`,
+            `zoompan=z='min(zoom+0.0012,1.25)':d=${frames}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=${LEGACY_WIDTH}x${LEGACY_HEIGHT}:fps=${LEGACY_FPS}`,
             "format=yuv420p"
         ].join(",");
 
@@ -92,7 +93,7 @@ async function imageBufferToVideo(imageBuffer) {
             "-i",
             inPath,
             "-t",
-            String(VIDEO_SECONDS),
+            String(LEGACY_VIDEO_SECONDS),
             "-vf",
             vf,
             "-c:v",
@@ -123,40 +124,39 @@ async function imageBufferToVideo(imageBuffer) {
     }
 }
 
-/**
- * Generate a short video for a guild (Flux still + ffmpeg). Uses 1 AI request.
- */
-async function generateGuildVideo(guildId, prompt) {
+/** @deprecated */
+async function generateGuildVideoLegacy(guildId, prompt) {
     const cleaned = String(prompt || "").trim();
     if (!cleaned) {
         const err = new Error("Prompt is required");
         err.code = "IMAGE_BAD_PROMPT";
         throw err;
     }
-
     if (guildId && !canUseAI(guildId)) {
         const err = new Error("AI daily limit reached");
         err.code = "AI_DAILY_LIMIT";
         err.guildId = guildId;
         throw err;
     }
-
     const { buffer: imageBuffer } = await fetchFluxImage(cleaned, {
         width: 1024,
         height: 1024
     });
-
     const videoBuffer = await imageBufferToVideo(imageBuffer);
-
-    if (guildId) {
-        useAI(guildId);
-    }
-
+    if (guildId) useAI(guildId);
     return {
         buffer: videoBuffer,
         contentType: "video/mp4",
-        durationSeconds: VIDEO_SECONDS
+        durationSeconds: LEGACY_VIDEO_SECONDS,
+        mode: "legacy-zoom"
     };
+}
+
+/**
+ * Primary video entry: real multi-frame AI video.
+ */
+async function generateGuildVideo(guildId, prompt, options = {}) {
+    return generateFrameBasedVideo(guildId, prompt, options);
 }
 
 function formatVideoUserError(error) {
@@ -179,7 +179,14 @@ function formatVideoUserError(error) {
     if (error.code === "VIDEO_FFMPEG_TIMEOUT") {
         return "❌ Video encoding took too long. Try again with a simpler prompt.";
     }
-    if (error.code === "VIDEO_FFMPEG_FAILED" || error.code === "VIDEO_EMPTY") {
+    if (error.code === "VIDEO_TIMEOUT") {
+        return "❌ Video generation timed out. Try a shorter or simpler prompt.";
+    }
+    if (
+        error.code === "VIDEO_FFMPEG_FAILED" ||
+        error.code === "VIDEO_EMPTY" ||
+        error.code === "VIDEO_MISSING_FRAME"
+    ) {
         return "❌ Video encoding failed. Please try again.";
     }
     return "❌ Video generation failed. Please try again.";
@@ -187,9 +194,13 @@ function formatVideoUserError(error) {
 
 module.exports = {
     generateGuildVideo,
+    generateGuildVideoLegacy,
+    generateFrameBasedVideo,
     imageBufferToVideo,
     formatVideoUserError,
     getRemaining,
     DAILY_LIMIT,
-    VIDEO_SECONDS
+    VIDEO_SECONDS: DEFAULT_CONFIG.durationSeconds,
+    DEFAULT_CONFIG,
+    TEST_CONFIG
 };
