@@ -10,6 +10,12 @@ const { requireAuth } = require('../middleware/auth');
 
 const router = express.Router();
 
+function sanitizeIntent(raw) {
+  const v = String(raw || '').trim().toLowerCase();
+  if (v === 'appeals' || v === 'advertise' || v === 'dashboard') return v;
+  return '';
+}
+
 /**
  * Single-flight + short-lived cache per Discord authorization code.
  * Duplicate callback hits (browser/proxy) share the same exchange result.
@@ -109,12 +115,18 @@ router.get('/discord/callback', async (req, res) => {
     }
 
     const { token } = await loginWithDiscordCode(code, redirectUri);
-    return res.redirect('/?' + new URLSearchParams({ login_token: token }).toString());
+    const intent = sanitizeIntent(req.query.state);
+    const q = new URLSearchParams({ login_token: token });
+    if (intent) q.set('intent', intent);
+    return res.redirect('/?' + q.toString());
   } catch (e) {
     console.error('[auth/discord/callback]', e?.message || e);
     const cached = codeJobs.get(String(req.query.code || ''));
     if (cached && cached.token) {
-      return res.redirect('/?' + new URLSearchParams({ login_token: cached.token }).toString());
+      const intent = sanitizeIntent(req.query.state);
+      const q = new URLSearchParams({ login_token: cached.token });
+      if (intent) q.set('intent', intent);
+      return res.redirect('/?' + q.toString());
     }
     return fail(e?.message || 'Login failed');
   }
