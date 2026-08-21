@@ -10,21 +10,71 @@ const { requireAuth } = require('../middleware/auth');
 
 const router = express.Router();
 
-// Prevent the same authorization code being exchanged twice (in-process)
-const usedCodes = new Map();
-const CODE_TTL_MS = 5 * 60 * 1000;
+/**
+ * Single-flight + short-lived cache per Discord authorization code.
+ * Duplicate callback hits (browser/proxy) share the same exchange result.
+ */
+const codeJobs = new Map(); // code -> { promise, token, user, at }
+const CODE_CACHE_TTL_MS = 2 * 60 * 1000;
 
-function rememberCode(code) {
+function pruneCodeJobs() {
   const now = Date.now();
-  for (const [k, t] of usedCodes) {
-    if (now - t > CODE_TTL_MS) usedCodes.delete(k);
+  for (const [code, job] of codeJobs) {
+    if (job.at && now - job.at > CODE_CACHE_TTL_MS) codeJobs.delete(code);
   }
-  if (usedCodes.has(code)) return false;
-  usedCodes.set(code, now);
-  return true;
 }
 
-/** Public OAuth config for the dashboard (never exposes client secret). */
+function loginWithDiscordCode(code, redirectUri) {
+  pruneCodeJobs();
+  const key = String(code);
+
+  const existing = codeJobs.get(key);
+  if (existing) {
+    if (existing.token) {
+      return Promise.resolve({ token: existing.token, user: existing.user });
+    }
+    if (existing.promise) return existing.promise;
+  }
+
+  const job = { at: Date.now(), promise: null, token: null, user: null };
+
+  const promise = (async () => {
+    try {
+      const tokenData = await exchangeCode(key, redirectUri);
+      const user = await fetchUser(tokenData.access_token);
+
+      let guildsCache = null;
+      try {
+        guildsCache = await fetchUserGuilds(tokenData.access_token);
+      } catch (guildErr) {
+        console.warn('[auth] guilds fetch failed:', guildErr?.message || guildErr);
+      }
+
+      const expiresIn = Number(tokenData.expires_in) || 604800;
+      const session = createSession({
+        user,
+        discordAccessToken: tokenData.access_token,
+        discordRefreshToken: tokenData.refresh_token || null,
+        discordTokenExpiresAt: Date.now() + expiresIn * 1000,
+        guildsCache
+      });
+
+      const token = session.token || session.accessToken;
+      job.token = token;
+      job.user = session.user;
+      job.at = Date.now();
+      return { token, user: session.user };
+    } catch (err) {
+      codeJobs.delete(key);
+      throw err;
+    }
+  })();
+
+  job.promise = promise;
+  codeJobs.set(key, job);
+  return promise;
+}
+
 router.get('/config', (req, res) => {
   const clientId = process.env.DISCORD_CLIENT_ID || null;
   const redirectUri = getPreferredRedirectUri(req);
@@ -37,21 +87,15 @@ router.get('/config', (req, res) => {
   });
 });
 
-/**
- * Discord redirects here after the user authorizes.
- * Exchanges the code ON THE SERVER (once), then sends the browser back to the dashboard with a session token.
- */
 router.get('/discord/callback', async (req, res) => {
   const fail = (message) => {
-    const q = new URLSearchParams({ login_error: message || 'Login failed' });
+    const q = new URLSearchParams({ login_error: String(message || 'Login failed') });
     return res.redirect('/?' + q.toString());
   };
 
   try {
-    const err = req.query.error;
-    const errDesc = req.query.error_description;
-    if (err) {
-      return fail(String(errDesc || err));
+    if (req.query.error) {
+      return fail(req.query.error_description || req.query.error);
     }
 
     const code = req.query.code;
@@ -59,44 +103,23 @@ router.get('/discord/callback', async (req, res) => {
       return fail('Missing login code from Discord.');
     }
 
-    if (!rememberCode(code)) {
-      return fail('Login code was already used. Click Open Dashboard once and try again.');
-    }
-
     const redirectUri = getPreferredRedirectUri(req);
     if (!redirectUri) {
       return fail('Server redirect URI is not configured.');
     }
 
-    const tokenData = await exchangeCode(code, redirectUri);
-    const user = await fetchUser(tokenData.access_token);
-
-    let guildsCache = null;
-    try {
-      guildsCache = await fetchUserGuilds(tokenData.access_token);
-    } catch (guildErr) {
-      console.warn('[auth/discord/callback] guilds fetch failed:', guildErr?.message || guildErr);
-    }
-
-    const expiresIn = Number(tokenData.expires_in) || 604800;
-    const session = createSession({
-      user,
-      discordAccessToken: tokenData.access_token,
-      discordRefreshToken: tokenData.refresh_token || null,
-      discordTokenExpiresAt: Date.now() + expiresIn * 1000,
-      guildsCache
-    });
-
-    const token = session.token || session.accessToken;
-    const q = new URLSearchParams({ login_token: token });
-    return res.redirect('/?' + q.toString());
+    const { token } = await loginWithDiscordCode(code, redirectUri);
+    return res.redirect('/?' + new URLSearchParams({ login_token: token }).toString());
   } catch (e) {
     console.error('[auth/discord/callback]', e?.message || e);
+    const cached = codeJobs.get(String(req.query.code || ''));
+    if (cached && cached.token) {
+      return res.redirect('/?' + new URLSearchParams({ login_token: cached.token }).toString());
+    }
     return fail(e?.message || 'Login failed');
   }
 });
 
-/** Legacy JSON callback (SPA posts the code). Kept for compatibility. */
 router.post('/callback', async (req, res, next) => {
   try {
     const { code, redirectUri } = req.body || {};
@@ -106,34 +129,9 @@ router.post('/callback', async (req, res, next) => {
       err.code = 'VALIDATION';
       throw err;
     }
-    if (!rememberCode(String(code))) {
-      const err = new Error('Login code was already used. Click Open Dashboard once and try again.');
-      err.status = 401;
-      err.code = 'OAUTH_FAILED';
-      throw err;
-    }
-
     const uri = redirectUri || getPreferredRedirectUri(req);
-    const tokenData = await exchangeCode(code, uri);
-    const user = await fetchUser(tokenData.access_token);
-
-    let guildsCache = null;
-    try {
-      guildsCache = await fetchUserGuilds(tokenData.access_token);
-    } catch (guildErr) {
-      console.warn('[auth/callback] initial guilds fetch failed:', guildErr?.message || guildErr);
-    }
-
-    const expiresIn = Number(tokenData.expires_in) || 604800;
-    const session = createSession({
-      user,
-      discordAccessToken: tokenData.access_token,
-      discordRefreshToken: tokenData.refresh_token || null,
-      discordTokenExpiresAt: Date.now() + expiresIn * 1000,
-      guildsCache
-    });
-
-    res.json(session);
+    const { token, user } = await loginWithDiscordCode(String(code), uri);
+    res.json({ token, accessToken: token, user });
   } catch (err) {
     next(err);
   }
