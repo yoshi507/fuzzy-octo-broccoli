@@ -85,34 +85,26 @@ function settingVal(id) {
   return state.settings[id];
 }
 
-/** Canonical redirect — must match Discord Developer Portal exactly. */
+/** Discord OAuth redirect — prefers server-side callback. */
 function redirectUri() {
   if (state.oauth && state.oauth.redirectUri) {
     return String(state.oauth.redirectUri).trim();
   }
-  return String(window.location.origin || '').replace(/\/$/, '') + '/';
-}
-
-function redirectUriForExchange() {
-  try {
-    var stored = sessionStorage.getItem('omnibot_oauth_redirect');
-    if (stored) return stored;
-  } catch (e) {}
-  return redirectUri();
-}
-
-function clearOAuthQueryFromUrl() {
-  try {
-    var clean = window.location.pathname || '/';
-    if (window.location.hash) clean += window.location.hash;
-    window.history.replaceState({}, '', clean);
-  } catch (e) {}
+  return String(window.location.origin || '').replace(/\/$/, '') + '/auth/discord/callback';
 }
 
 function hideToast() {
   try {
     var t = document.getElementById('toast');
     if (t) t.classList.add('hidden');
+  } catch (e) {}
+}
+
+function clearAuthQueryFromUrl() {
+  try {
+    var clean = window.location.pathname || '/';
+    if (window.location.hash) clean += window.location.hash;
+    window.history.replaceState({}, '', clean);
   } catch (e) {}
 }
 
@@ -124,21 +116,16 @@ async function loadOAuthConfig() {
   }
 }
 
-/** Primary login entry — used by buttons (also exposed on window). */
+/** Start Discord login — Discord returns to the SERVER callback. */
 function startLogin(intent) {
   intent = intent || 'dashboard';
-  try {
-    localStorage.setItem(INTENT_KEY, intent);
-  } catch (e) {}
+  try { localStorage.setItem(INTENT_KEY, intent); } catch (e) {}
   state.mode = intent;
   state.oauthError = null;
   hideToast();
 
   var clientId = (state.oauth && state.oauth.clientId) || '1538542627882799155';
   var redir = redirectUri();
-  try {
-    sessionStorage.setItem('omnibot_oauth_redirect', redir);
-  } catch (e) {}
 
   var url =
     'https://discord.com/api/oauth2/authorize' +
@@ -152,92 +139,60 @@ function startLogin(intent) {
 }
 try { window.startLogin = startLogin; } catch (e) {}
 
-var __oauthExchangePromise = null;
-var __oauthExchangedCodes = {};
-
+/** Handle /?login_token= from server callback (or legacy errors/codes). */
 async function handleOAuthCallback() {
   var params = new URLSearchParams(window.location.search);
-  var err = params.get('error');
-  var errDesc = params.get('error_description');
-  var code = params.get('code');
 
-  if (!err && !code) return;
-
-  clearOAuthQueryFromUrl();
-
-  if (err) {
-    if (state.token) {
-      state.oauthError = null;
-      return;
-    }
-    var msg = errDesc || err || 'Discord login failed.';
-    if (err === 'invalid_request') {
-      msg =
-        'Discord rejected the login redirect. Add this exact URL under Discord Developer Portal → OAuth2 → Redirects:\n' +
-        redirectUriForExchange();
-    }
-    state.oauthError = msg;
+  var loginToken = params.get('login_token');
+  if (loginToken) {
+    state.token = loginToken;
+    try { localStorage.setItem(TOKEN_KEY, loginToken); } catch (e) {}
+    state.oauthError = null;
+    hideToast();
+    clearAuthQueryFromUrl();
     return;
   }
 
+  var loginError = params.get('login_error');
+  if (loginError) {
+    if (!state.token) state.oauthError = loginError;
+    clearAuthQueryFromUrl();
+    return;
+  }
+
+  var err = params.get('error');
+  var errDesc = params.get('error_description');
+  if (err) {
+    if (!state.token) state.oauthError = errDesc || err || 'Discord login failed.';
+    clearAuthQueryFromUrl();
+    return;
+  }
+
+  var code = params.get('code');
   if (!code) return;
 
+  clearAuthQueryFromUrl();
   if (state.token) {
     state.oauthError = null;
     return;
   }
 
-  if (__oauthExchangedCodes[code]) {
-    state.oauthError = null;
-    return;
-  }
-
-  if (__oauthExchangePromise) {
-    try {
-      await __oauthExchangePromise;
-    } catch (e) {}
-    return;
-  }
-
-  __oauthExchangePromise = (async function () {
+  try {
     var data = await api('/auth/callback', {
       method: 'POST',
-      body: JSON.stringify({
-        code: code,
-        redirectUri: redirectUriForExchange()
-      })
+      body: JSON.stringify({ code: code, redirectUri: redirectUri() })
     });
     var tok = (data && (data.token || data.accessToken)) || null;
-    if (!tok) {
-      throw new Error('Login succeeded but no session token was returned. Please try again.');
-    }
-    state.token = tok;
-    try {
-      localStorage.setItem(TOKEN_KEY, tok);
-    } catch (e) {}
-    state.oauthError = null;
-    __oauthExchangedCodes[code] = true;
-    try {
-      sessionStorage.removeItem('omnibot_oauth_redirect');
-    } catch (e) {}
-    hideToast();
-    return data;
-  })();
-
-  try {
-    await __oauthExchangePromise;
-  } catch (e) {
-    var m = (e && e.message) || 'Login failed';
-    if (/invalid.?code|invalid_grant|already been used/i.test(m)) {
-      m = 'Login code was already used or expired. Click Open Dashboard again to sign in.';
-    }
-    if (!state.token) {
-      state.oauthError = m;
-    } else {
+    if (tok) {
+      state.token = tok;
+      try { localStorage.setItem(TOKEN_KEY, tok); } catch (e) {}
       state.oauthError = null;
+      hideToast();
+    } else {
+      state.oauthError = 'Login succeeded but no session token was returned.';
     }
-  } finally {
-    __oauthExchangePromise = null;
+  } catch (e) {
+    state.oauthError = (e && e.message) || 'Login failed';
   }
 }
 
@@ -275,7 +230,7 @@ function softUpdateOverviewStatus() {
     setText('[data-stat-members]', stats.members != null ? String(stats.members) : '—');
     setText('[data-stat-ai]', (stats.aiUsedToday != null ? stats.aiUsedToday : 0) + ' / 20');
     setText('[data-stat-latency]', bot.latencyMs != null ? bot.latencyMs + ' ms' : '—');
-  } catch (e) { /* ignore */ }
+  } catch (e) {}
 }
 
 async function refreshGuildData(silent) {
