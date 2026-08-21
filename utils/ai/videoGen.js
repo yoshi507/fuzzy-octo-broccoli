@@ -1,7 +1,7 @@
 /**
- * Video generation for OmniBot.
- * Primary: multi-frame Pollinations stills + FFmpeg stitch (real frame changes).
- * Legacy: single Flux still + FFmpeg Ken Burns (kept for emergency fallback).
+ * Video generation for OmniBot — queued, resource-safe.
+ * Primary: multi-frame Pollinations + FFmpeg stitch.
+ * Legacy Ken Burns kept only as emergency export (not used by /imagine).
  */
 
 const fs = require("fs");
@@ -18,21 +18,25 @@ const {
     DEFAULT_CONFIG,
     TEST_CONFIG
 } = require("./frameVideoGen.js");
+const {
+    enqueueGeneration,
+    QUEUE_WAIT_MESSAGE
+} = require("./generationQueue.js");
 
 const LEGACY_VIDEO_SECONDS = 5;
 const LEGACY_FPS = 24;
-const LEGACY_WIDTH = 960;
-const LEGACY_HEIGHT = 540;
+const LEGACY_WIDTH = 512;
+const LEGACY_HEIGHT = 512;
 
-function runFfmpeg(args, timeoutMs = 90000) {
+function runFfmpeg(args, timeoutMs = 60000) {
     return new Promise((resolve, reject) => {
         const proc = spawn("ffmpeg", args, {
-            stdio: ["ignore", "pipe", "pipe"]
+            stdio: ["ignore", "ignore", "pipe"]
         });
         let stderr = "";
         const timer = setTimeout(() => {
             try {
-                proc.kill("SIGKILL");
+                if (!proc.killed) proc.kill("SIGKILL");
             } catch {
                 /* ignore */
             }
@@ -43,7 +47,7 @@ function runFfmpeg(args, timeoutMs = 90000) {
 
         proc.stderr.on("data", (chunk) => {
             stderr += chunk.toString();
-            if (stderr.length > 8000) stderr = stderr.slice(-4000);
+            if (stderr.length > 4000) stderr = stderr.slice(-2000);
         });
         proc.on("error", (err) => {
             clearTimeout(timer);
@@ -60,7 +64,7 @@ function runFfmpeg(args, timeoutMs = 90000) {
             if (code === 0) resolve();
             else {
                 const err = new Error(
-                    `ffmpeg exited with code ${code}: ${stderr.slice(-400)}`
+                    `ffmpeg exited with code ${code}: ${stderr.slice(-300)}`
                 );
                 err.code = "VIDEO_FFMPEG_FAILED";
                 reject(err);
@@ -69,13 +73,12 @@ function runFfmpeg(args, timeoutMs = 90000) {
     });
 }
 
-/** @deprecated Legacy single-image zoom — kept for emergency fallback only. */
+/** @deprecated */
 async function imageBufferToVideo(imageBuffer) {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "omni-vid-legacy-"));
     const extGuess = imageBuffer[0] === 0x89 ? "png" : "jpg";
     const inPath = path.join(tmpDir, `still.${extGuess}`);
     const outPath = path.join(tmpDir, "out.mp4");
-
     try {
         fs.writeFileSync(inPath, imageBuffer);
         const frames = LEGACY_VIDEO_SECONDS * LEGACY_FPS;
@@ -85,7 +88,6 @@ async function imageBufferToVideo(imageBuffer) {
             `zoompan=z='min(zoom+0.0012,1.25)':d=${frames}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=${LEGACY_WIDTH}x${LEGACY_HEIGHT}:fps=${LEGACY_FPS}`,
             "format=yuv420p"
         ].join(",");
-
         await runFfmpeg([
             "-y",
             "-loop",
@@ -99,15 +101,14 @@ async function imageBufferToVideo(imageBuffer) {
             "-c:v",
             "libx264",
             "-preset",
-            "veryfast",
+            "ultrafast",
             "-crf",
-            "23",
+            "28",
             "-movflags",
             "+faststart",
             "-an",
             outPath
         ]);
-
         const buf = fs.readFileSync(outPath);
         if (!buf.length) {
             const err = new Error("Empty video output");
@@ -139,8 +140,8 @@ async function generateGuildVideoLegacy(guildId, prompt) {
         throw err;
     }
     const { buffer: imageBuffer } = await fetchFluxImage(cleaned, {
-        width: 1024,
-        height: 1024
+        width: 512,
+        height: 512
     });
     const videoBuffer = await imageBufferToVideo(imageBuffer);
     if (guildId) useAI(guildId);
@@ -152,11 +153,22 @@ async function generateGuildVideoLegacy(guildId, prompt) {
     };
 }
 
-/**
- * Primary video entry: real multi-frame AI video.
- */
 async function generateGuildVideo(guildId, prompt, options = {}) {
-    return generateFrameBasedVideo(guildId, prompt, options);
+    const onQueued = options.onQueued;
+    const onProgress = options.onProgress;
+    const testMode = options.testMode;
+    const config = options.config;
+
+    return enqueueGeneration(
+        () =>
+            generateFrameBasedVideo(guildId, prompt, {
+                onProgress,
+                testMode,
+                config
+            }),
+        "video",
+        { onQueued }
+    );
 }
 
 function formatVideoUserError(error) {
@@ -169,7 +181,9 @@ function formatVideoUserError(error) {
         error.code === "IMAGE_AUTH_FAILED" ||
         error.code === "IMAGE_RATE_LIMIT" ||
         error.code === "IMAGE_BAD_PROMPT" ||
-        error.code === "IMAGE_EMPTY"
+        error.code === "IMAGE_EMPTY" ||
+        error.code === "IMAGE_TIMEOUT" ||
+        error.code === "IMAGE_TOO_LARGE"
     ) {
         return formatImageUserError(error);
     }
@@ -180,7 +194,10 @@ function formatVideoUserError(error) {
         return "❌ Video encoding took too long. Try again with a simpler prompt.";
     }
     if (error.code === "VIDEO_TIMEOUT") {
-        return "❌ Video generation timed out. Try a shorter or simpler prompt.";
+        return "❌ Video generation timed out. Try a simpler prompt.";
+    }
+    if (error.code === "VIDEO_TOO_LARGE") {
+        return "❌ The generated video was too large to upload. Try a simpler prompt.";
     }
     if (
         error.code === "VIDEO_FFMPEG_FAILED" ||
@@ -202,5 +219,6 @@ module.exports = {
     DAILY_LIMIT,
     VIDEO_SECONDS: DEFAULT_CONFIG.durationSeconds,
     DEFAULT_CONFIG,
-    TEST_CONFIG
+    TEST_CONFIG,
+    QUEUE_WAIT_MESSAGE
 };

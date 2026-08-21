@@ -3,7 +3,8 @@ const {
     generateGuildImage,
     formatImageUserError,
     getRemaining,
-    DAILY_LIMIT
+    DAILY_LIMIT,
+    QUEUE_WAIT_MESSAGE
 } = require("../utils/ai/imageGen.js");
 const {
     generateGuildVideo,
@@ -26,6 +27,17 @@ function normalizeTypeAndPrompt(interaction) {
     }
 
     return { type, prompt: String(prompt || "").trim() };
+}
+
+async function safeEdit(interaction, payload) {
+    try {
+        if (interaction.deferred || interaction.replied) {
+            return await interaction.editReply(payload);
+        }
+        return await interaction.reply(payload);
+    } catch {
+        /* ignore Discord API errors during long jobs */
+    }
 }
 
 module.exports = {
@@ -69,43 +81,36 @@ module.exports = {
             });
         }
 
-        const defer =
-            typeof interaction.deferReply === "function"
-                ? interaction.deferReply()
-                : null;
-        if (defer) await defer;
+        if (typeof interaction.deferReply === "function") {
+            await interaction.deferReply();
+        }
+
+        const onQueued = async () => {
+            await safeEdit(interaction, { content: QUEUE_WAIT_MESSAGE });
+        };
 
         try {
             if (type === "video") {
                 let lastEdit = 0;
                 const onProgress = async (done, total) => {
                     const now = Date.now();
-                    if (done < total && now - lastEdit < 3000) return;
+                    if (done < total && now - lastEdit < 4000) return;
                     lastEdit = now;
                     const text =
                         done >= total
                             ? "🎬 Rendering video…"
                             : `🎬 Generating video... **${done}/${total}** frames`;
-                    try {
-                        if (interaction.deferred || interaction.replied) {
-                            await interaction.editReply({ content: text });
-                        }
-                    } catch {
-                        /* ignore */
-                    }
+                    await safeEdit(interaction, { content: text });
                 };
 
-                try {
-                    await interaction.editReply({
-                        content: "🎬 Generating video... **0/** frames"
-                    });
-                } catch {
-                    /* ignore */
-                }
+                await safeEdit(interaction, {
+                    content: "🎬 Generating video... **0/** frames"
+                });
 
                 const { buffer, frameCount, fps, durationSeconds } =
                     await generateGuildVideo(interaction.guild.id, prompt, {
-                        onProgress
+                        onProgress,
+                        onQueued
                     });
 
                 const file = new AttachmentBuilder(buffer, {
@@ -113,24 +118,26 @@ module.exports = {
                 });
                 const remaining = getRemaining(interaction.guild.id);
                 const content =
-                    `🎬 **Video generated!** (${frameCount || "?"} frames · ${fps || 12} fps · ~${durationSeconds || 5}s)\n` +
+                    `🎬 **Video generated!** (${frameCount || "?"} frames · ${fps || 12} fps · ~${Math.round(durationSeconds || 3)}s)\n` +
                     `\`${prompt.slice(0, 120)}${prompt.length > 120 ? "…" : ""}\`\n` +
                     `_AI requests left today: **${remaining}/${DAILY_LIMIT}**_`;
 
-                if (interaction.deferred || interaction.replied) {
-                    return interaction.editReply({ content, files: [file] });
-                }
-                return interaction.reply({ content, files: [file] });
+                return safeEdit(interaction, { content, files: [file] });
             }
+
+            await safeEdit(interaction, {
+                content: "🖼️ Generating image…"
+            });
 
             const { buffer, contentType } = await generateGuildImage(
                 interaction.guild.id,
-                prompt
+                prompt,
+                { onQueued }
             );
 
-            const ext = contentType.includes("png")
+            const ext = (contentType || "").includes("png")
                 ? "png"
-                : contentType.includes("webp")
+                : (contentType || "").includes("webp")
                   ? "webp"
                   : "jpg";
             const file = new AttachmentBuilder(buffer, {
@@ -142,26 +149,17 @@ module.exports = {
                 `🖼️ **Image** (Flux) · \`${prompt.slice(0, 120)}${prompt.length > 120 ? "…" : ""}\`\n` +
                 `_AI requests left today: **${remaining}/${DAILY_LIMIT}**_`;
 
-            if (interaction.deferred || interaction.replied) {
-                return interaction.editReply({ content, files: [file] });
-            }
-            return interaction.reply({ content, files: [file] });
+            return safeEdit(interaction, { content, files: [file] });
         } catch (error) {
             const msg =
                 type === "video"
                     ? formatVideoUserError(error)
                     : formatImageUserError(error);
-            try {
-                if (interaction.deferred || interaction.replied) {
-                    return interaction.editReply(msg);
-                }
-                return interaction.reply({ content: msg, ephemeral: true });
-            } catch {
-                console.error(
-                    "imagine error:",
-                    error?.code || error?.message || error
-                );
-            }
+            await safeEdit(interaction, { content: msg });
+            console.error(
+                "imagine error:",
+                error?.code || error?.message || error
+            );
         }
     }
 };
