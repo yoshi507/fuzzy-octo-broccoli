@@ -186,7 +186,7 @@ function formatImageUserError(error) {
         return "❌ Cloudflare authentication failed. Check `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN`.";
     }
     if (error.code === "IMAGE_RATE_LIMIT" || error.code === "CF_RATE_LIMIT") {
-        return "❌ The image service is rate-limited. Try again in a moment.";
+        return "❌ Cloudflare Workers AI is rate-limited or out of capacity right now. Wait a minute and try again. (Check Cloudflare dashboard → Workers AI usage/neurons if this keeps happening.)";
     }
     if (error.code === "IMAGE_BAD_PROMPT") {
         return "❌ Please provide a description of the image you want.";
