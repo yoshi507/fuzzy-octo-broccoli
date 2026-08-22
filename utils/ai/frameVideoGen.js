@@ -1,13 +1,14 @@
 /**
- * Frame-based video: Pollinations frames → disk → FFmpeg stitch.
- * Defaults: 3s · 6 FPS · 18 frames · 512×512.
+ * Frame-based video: txt2img frame1 then img2img chain -> FFmpeg stitch.
+ * Defaults: 3s / 6 FPS / 18 frames / 512x512.
  */
 
 const fs = require("fs");
 const path = require("path");
 const os = require("os");
 const { spawn } = require("child_process");
-const { fetchFluxImage } = require("./imageGen.js");
+const { fetchFluxImage, fetchImg2Img } = require("./imageGen.js");
+const { DEFAULT_IMG2IMG_STRENGTH } = require("./cloudflareImage.js");
 const { canUseAI, useAI } = require("./aiLimit.js");
 
 const DEFAULT_CONFIG = {
@@ -22,7 +23,9 @@ const DEFAULT_CONFIG = {
     frameProgressEvery: 1,
     maxOutputBytes: 8 * 1024 * 1024,
     ffmpegStitchTimeoutMs: 120000,
-    ffmpegConvertTimeoutMs: 30000
+    ffmpegConvertTimeoutMs: 30000,
+    /** Low = stay close to previous frame (Cloudflare img2img). */
+    img2imgStrength: 0.35
 };
 
 const liveFfmpeg = new Set();
@@ -89,7 +92,7 @@ function runFfmpeg(args, timeoutMs = 90000, label = "ffmpeg") {
 
         const timer = setTimeout(() => {
             logVideo(
-                `timeout ${timeoutMs}ms label=${label} pid=${pid} — sending SIGTERM/SIGKILL`
+                `timeout ${timeoutMs}ms label=${label} pid=${pid} - sending SIGTERM/SIGKILL`
             );
             killProc(proc, `timeout:${label}`);
             finish(() => {
@@ -173,30 +176,44 @@ function runFfmpeg(args, timeoutMs = 90000, label = "ffmpeg") {
 
 function buildFramePrompts(userPrompt, frameCount) {
     const base = String(userPrompt || "").trim().slice(0, 280);
-    const consistency =
-        "same subject, same environment, same art style, same lighting, " +
-        "cinematic animation frame, no text, no watermark";
     const prompts = [];
     for (let i = 0; i < frameCount; i++) {
+        if (i === 0) {
+            prompts.push(
+                `${base}. Cinematic still, clear composition, no text, no watermark.`
+            );
+            continue;
+        }
         const t = frameCount <= 1 ? 0 : i / (frameCount - 1);
         const pct = Math.round(t * 100);
-        let stage;
-        if (t < 0.34) stage = "beginning of the action";
-        else if (t < 0.67) stage = "middle of the action";
-        else stage = "end of the action";
+        let motion;
+        if (t < 0.34) {
+            motion = "Move the camera slightly forward / begin the action gently.";
+        } else if (t < 0.67) {
+            motion = "Continue the same camera motion and action slightly further.";
+        } else {
+            motion = "Continue the motion toward the end of the action.";
+        }
         prompts.push(
-            `${base}. Frame ${i + 1}/${frameCount} (${pct}%). ${stage}. ${consistency}.`
+            `Using the provided image as the reference, preserve the same subject, environment, ` +
+                `composition, art style, lighting and colours. ${motion} ` +
+                `Subtle change only (${pct}% through the sequence). ` +
+                `Scene: ${base}. No text, no watermark.`
         );
     }
     return prompts;
 }
 
-async function fetchFrameWithRetry(prompt, opts, maxRetries, retryDelayMs) {
+async function fetchFrameWithRetry(prompt, opts, maxRetries, retryDelayMs, referenceBuffer) {
     let lastErr;
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
         try {
-            logVideo(`frame fetch attempt ${attempt}/${maxRetries}`);
-            const result = await fetchFluxImage(prompt, opts);
+            logVideo(
+                `frame fetch attempt ${attempt}/${maxRetries} mode=${referenceBuffer ? "img2img" : "txt2img"}`
+            );
+            const result = referenceBuffer
+                ? await fetchImg2Img(prompt, referenceBuffer, opts)
+                : await fetchFluxImage(prompt, opts);
             if (!result?.buffer?.length) {
                 throw Object.assign(new Error("Empty frame"), {
                     code: "IMAGE_EMPTY"
@@ -211,7 +228,9 @@ async function fetchFrameWithRetry(prompt, opts, maxRetries, retryDelayMs) {
             );
             if (
                 err?.code === "IMAGE_NOT_CONFIGURED" ||
-                err?.code === "IMAGE_AUTH_FAILED"
+                err?.code === "IMAGE_AUTH_FAILED" ||
+                err?.code === "CF_AUTH_FAILED" ||
+                err?.code === "CF_NOT_CONFIGURED"
             ) {
                 throw err;
             }
@@ -355,7 +374,7 @@ async function generateFrameBasedVideo(guildId, prompt, options = {}) {
     let timedOut = false;
     const timeoutId = setTimeout(() => {
         timedOut = true;
-        logVideo("overall timeout — stopping");
+        logVideo("overall timeout - stopping");
         killAllFfmpeg("overall-timeout");
     }, cfg.overallTimeoutMs);
     timeoutId.unref?.();
@@ -369,6 +388,12 @@ async function generateFrameBasedVideo(guildId, prompt, options = {}) {
             }
         }
 
+        let previousBuffer = null;
+        const strength =
+            cfg.img2imgStrength != null
+                ? Number(cfg.img2imgStrength)
+                : DEFAULT_IMG2IMG_STRENGTH;
+
         for (let i = 0; i < framePrompts.length; i++) {
             if (timedOut) {
                 const err = new Error("Video generation timed out");
@@ -376,14 +401,23 @@ async function generateFrameBasedVideo(guildId, prompt, options = {}) {
                 throw err;
             }
 
-            logVideo(`frame ${i + 1}/${frameCount}`);
+            logVideo(
+                `frame ${i + 1}/${frameCount} ${previousBuffer ? "img2img" : "txt2img"} strength=${strength}`
+            );
             const { buffer } = await fetchFrameWithRetry(
                 framePrompts[i],
-                { width: cfg.width, height: cfg.height, seed },
+                {
+                    width: cfg.width,
+                    height: cfg.height,
+                    seed,
+                    strength
+                },
                 cfg.maxRetriesPerFrame,
-                cfg.retryDelayMs
+                cfg.retryDelayMs,
+                previousBuffer
             );
             await writeFrameFile(tmpDir, i, buffer, cfg.ffmpegConvertTimeoutMs);
+            previousBuffer = buffer;
             completed++;
             if (onProgress) {
                 try {
@@ -395,7 +429,7 @@ async function generateFrameBasedVideo(guildId, prompt, options = {}) {
             await sleep(100);
         }
 
-        logVideo("frames ready — stitch");
+        logVideo("frames ready - stitch");
         await stitchFramesToMp4(
             tmpDir,
             frameCount,
