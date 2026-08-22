@@ -5,6 +5,7 @@
  */
 
 const play = require("play-dl");
+const { withTimeout } = require("../withTimeout.js");
 
 let spotifyTokenReady = false;
 
@@ -74,10 +75,14 @@ function isSpotifyUrl(input) {
 }
 
 async function searchSoundCloud(query) {
-    const results = await play.search(String(query).slice(0, 200), {
-        source: { soundcloud: "tracks" },
-        limit: 5
-    });
+    const results = await withTimeout(
+        play.search(String(query).slice(0, 200), {
+            source: { soundcloud: "tracks" },
+            limit: 5
+        }),
+        20_000,
+        "SoundCloud search"
+    );
     if (!results?.length) return null;
     const track = results[0];
     return {
@@ -88,10 +93,6 @@ async function searchSoundCloud(query) {
     };
 }
 
-/**
- * @param {string} query
- * @returns {Promise<{ title: string, url: string, source: string, duration?: number|null }>}
- */
 async function resolveTrack(query) {
     const q = String(query || "").trim();
     if (!q) {
@@ -112,7 +113,11 @@ async function resolveTrack(query) {
 
     if (isSoundCloudUrl(q)) {
         try {
-            const info = await play.soundcloud(q);
+            const info = await withTimeout(
+                play.soundcloud(q),
+                15_000,
+                "SoundCloud track info"
+            );
             return {
                 title: info?.name || info?.title || "SoundCloud track",
                 url: q,
@@ -138,7 +143,7 @@ async function resolveTrack(query) {
                     /* ignore */
                 }
             }
-            const sp = await play.spotify(q);
+            const sp = await withTimeout(play.spotify(q), 15_000, "Spotify lookup");
             const name = sp?.name || "Unknown track";
             const artists = Array.isArray(sp?.artists)
                 ? sp.artists.map((a) => a.name || a).filter(Boolean).join(" ")
