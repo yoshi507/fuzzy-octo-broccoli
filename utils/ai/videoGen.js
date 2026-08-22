@@ -36,7 +36,12 @@ function formatVideoUserError(error) {
         error.code === "IMAGE_TIMEOUT" ||
         error.code === "IMAGE_TOO_LARGE" ||
         error.code === "IMAGE_PROVIDER_ERROR" ||
-        error.code === "IMAGE_PAYMENT_REQUIRED"
+        error.code === "CF_NOT_CONFIGURED" ||
+        error.code === "CF_AUTH_FAILED" ||
+        error.code === "CF_RATE_LIMIT" ||
+        error.code === "CF_TIMEOUT" ||
+        error.code === "CF_PROVIDER_ERROR" ||
+        error.code === "CF_NETWORK"
     ) {
         return formatImageUserError(error);
     }
