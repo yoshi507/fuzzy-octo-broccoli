@@ -14,6 +14,7 @@ const publicAppealsRoutes = require('./routes/publicAppeals');
 const publicAdvertiseRoutes = require('./routes/publicAdvertise');
 const personaRoutes = require('./routes/persona');
 const featuresRoutes = require('./routes/features');
+const advisorRoutes = require('./routes/advisor');
 
 let activeServer = null;
 let activeApp = null;
@@ -65,39 +66,36 @@ function createApiApp(discordClient) {
         try {
           const u = new URL(origin);
           if (u.hostname === 'yoshi507.github.io') return callback(null, true);
-        } catch {}
+          if (u.hostname.endsWith('.wisp.uno')) return callback(null, true);
+        } catch (_) {}
         return callback(null, false);
       },
-      credentials: false,
-      methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-      allowedHeaders: ['Content-Type', 'Authorization']
-    })
-  );
-
-  app.use(
-    rateLimit({
-      windowMs: 60 * 1000,
-      max: 120,
-      standardHeaders: true,
-      legacyHeaders: false,
-      message: { error: 'Too many requests' }
+      credentials: true
     })
   );
 
   app.use(express.json({ limit: '2mb' }));
+  app.use(express.urlencoded({ extended: true }));
+
+  const limiter = rateLimit({
+    windowMs: 60 * 1000,
+    max: 120,
+    standardHeaders: true,
+    legacyHeaders: false
+  });
+  app.use(limiter);
 
   app.get('/health', (req, res) => {
     const client = req.app.locals.discordClient || global.__omnibotClient || null;
     res.json({
       ok: true,
       service: 'OmniBot API',
-      uptime: process.uptime(),
-      botReady: Boolean(
+      discordReady: Boolean(
         client &&
           (typeof client.isReady === 'function' ? client.isReady() : client.readyAt)
       ),
       guilds: client?.guilds?.cache?.size ?? 0,
-      tag: client?.user?.tag || null
+      uptime: process.uptime()
     });
   });
 
@@ -106,10 +104,11 @@ function createApiApp(discordClient) {
   app.use('/guilds/:guildId/settings', settingsRoutes);
   app.use('/guilds/:guildId/persona', personaRoutes);
   app.use('/guilds/:guildId/features', featuresRoutes);
+  app.use('/guilds/:guildId/advisor', advisorRoutes);
   app.use('/guilds/:guildId/bot', botRouter);
   app.use('/guilds/:guildId/stats', statsRouter);
-  app.use('/appeals', publicAppealsRoutes);
-  app.use('/advertise', publicAdvertiseRoutes);
+  app.use('/public/appeals', publicAppealsRoutes);
+  app.use('/public/advertise', publicAdvertiseRoutes);
 
   const dashDir = path.join(__dirname, '../public/dashboard');
 
