@@ -4,11 +4,12 @@ const {
     createAudioResource,
     VoiceConnectionStatus,
     AudioPlayerStatus,
-    entersState
+    entersState,
+    StreamType
 } = require("@discordjs/voice");
-
 const { ChannelType } = require("discord.js");
 const { spawn } = require("child_process");
+const { withTimeout } = require("../withTimeout.js");
 
 const players = new Map();
 
@@ -22,30 +23,43 @@ function getPlayer(guildId) {
             current: null,
             ffmpeg: null,
             volume: 1,
-            loop: "off"
+            loop: "off",
+            leaveTimer: null,
+            voiceChannelId: null
         };
 
         player.on(AudioPlayerStatus.Idle, async () => {
             if (!data.current) return;
 
             if (data.loop === "song") {
-                await playSong(data, data.current.title, data.current.url);
+                try {
+                    await playSong(data, data.current.title, data.current.url);
+                } catch (e) {
+                    console.error("[Music] loop replay failed:", e?.message || e);
+                    data.current = null;
+                }
                 return;
             }
 
             if (data.loop === "queue" && data.queue.length > 0) {
                 data.queue.push(data.current);
-                const next = data.queue.shift();
-                await playSong(data, next.title, next.url);
-                return;
             }
 
             if (data.queue.length > 0) {
                 const next = data.queue.shift();
-                await playSong(data, next.title, next.url);
+                try {
+                    await playSong(data, next.title, next.url);
+                } catch (e) {
+                    console.error("[Music] next track failed:", e?.message || e);
+                    data.current = null;
+                }
             } else {
                 data.current = null;
             }
+        });
+
+        player.on("error", (err) => {
+            console.error("[Music] player error:", err?.message || err);
         });
 
         players.set(guildId, data);
@@ -62,8 +76,20 @@ async function connect(member) {
     }
 
     const existing = players.get(guild.id);
-    if (existing && existing.connection) {
+    if (
+        existing?.connection &&
+        existing.voiceChannelId === voiceChannel.id &&
+        existing.connection.state.status !== VoiceConnectionStatus.Destroyed
+    ) {
         return existing;
+    }
+
+    if (existing?.connection) {
+        try {
+            existing.connection.destroy();
+        } catch {
+            /* ignore */
+        }
     }
 
     const connection = joinVoiceChannel({
@@ -73,32 +99,54 @@ async function connect(member) {
         selfDeaf: true
     });
 
-    await entersState(connection, VoiceConnectionStatus.Ready, 15000);
+    try {
+        await entersState(connection, VoiceConnectionStatus.Ready, 20000);
+    } catch (e) {
+        try {
+            connection.destroy();
+        } catch {
+            /* ignore */
+        }
+        throw new Error(
+            "Could not join the voice channel in time. Check bot permissions (Connect + Speak)."
+        );
+    }
 
     const data = getPlayer(guild.id);
     data.connection = connection;
+    data.voiceChannelId = voiceChannel.id;
     connection.subscribe(data.player);
 
-    let leaveTimer = null;
-
-    const checkEmptyChannel = () => {
-        const channel = member.guild.channels.cache.get(voiceChannel.id);
-        if (!channel || channel.type !== ChannelType.GuildVoice) return;
-
-        const humans = channel.members.filter((m) => !m.user.bot);
-        if (humans.size === 0) {
-            if (leaveTimer) clearTimeout(leaveTimer);
-            leaveTimer = setTimeout(() => {
-                const current = players.get(guild.id);
-                if (current && current.connection) {
-                    console.log(`Leaving empty voice channel in ${guild.name}`);
-                    destroy(guild.id);
+    connection.on("stateChange", (_oldState, newState) => {
+        if (newState.status === VoiceConnectionStatus.Disconnected) {
+            setTimeout(() => {
+                if (
+                    data.connection &&
+                    data.connection.state.status ===
+                        VoiceConnectionStatus.Disconnected
+                ) {
+                    try {
+                        data.connection.destroy();
+                    } catch {
+                        /* ignore */
+                    }
+                    data.connection = null;
                 }
-            }, 30000);
-        } else if (leaveTimer) {
-            clearTimeout(leaveTimer);
-            leaveTimer = null;
+            }, 5000);
         }
+    });
+
+    const scheduleLeaveCheck = () => {
+        if (data.leaveTimer) clearTimeout(data.leaveTimer);
+        data.leaveTimer = setTimeout(() => {
+            const channel = guild.channels.cache.get(voiceChannel.id);
+            if (!channel || channel.type !== ChannelType.GuildVoice) return;
+            const humans = channel.members.filter((m) => !m.user.bot);
+            if (humans.size === 0) {
+                console.log(`[Music] Leaving empty VC in ${guild.name}`);
+                destroy(guild.id);
+            }
+        }, 30000);
     };
 
     member.client.on("voiceStateUpdate", (oldState, newState) => {
@@ -106,53 +154,38 @@ async function connect(member) {
             oldState.channelId === voiceChannel.id ||
             newState.channelId === voiceChannel.id
         ) {
-            checkEmptyChannel();
+            scheduleLeaveCheck();
         }
     });
 
     return data;
 }
 
-async function playSong(data, title, url, startSeconds = 0) {
+function killFfmpeg(data) {
     if (data.ffmpeg) {
         try {
-            data.ffmpeg.kill();
+            data.ffmpeg.kill("SIGKILL");
         } catch {
             /* ignore */
         }
         data.ffmpeg = null;
     }
+}
 
-    // Prefer play-dl stream (SoundCloud / direct). Never use YouTube.
-    try {
-        const play = require("play-dl");
-        if (/youtu\.be|youtube\.com/i.test(String(url))) {
-            throw new Error("YouTube streaming is disabled");
-        }
-        const streamInfo = await play.stream(url, {
-            seek: startSeconds || undefined
-        });
-        const resource = createAudioResource(streamInfo.stream, {
-            inputType: streamInfo.type,
-            inlineVolume: true
-        });
-        if (resource.volume) {
-            resource.volume.setVolume(data.volume ?? 1);
-        }
-        data.current = { title, url };
-        data.player.play(resource);
-        return;
-    } catch (streamErr) {
-        console.warn(
-            "[Music] play-dl stream failed, trying yt-dlp non-YouTube:",
-            streamErr?.message || streamErr
-        );
-    }
+async function streamWithPlayDl(url, startSeconds = 0) {
+    const play = require("play-dl");
+    const streamInfo = await withTimeout(
+        play.stream(url, {
+            seek: startSeconds > 0 ? startSeconds : undefined,
+            discordPlayerCompatibility: true
+        }),
+        25000,
+        "play-dl stream"
+    );
+    return streamInfo;
+}
 
-    if (/youtu\.be|youtube\.com/i.test(String(url))) {
-        throw new Error("YouTube streaming is disabled");
-    }
-
+function streamWithYtDlp(url, startSeconds = 0) {
     const args = [
         "-f",
         "bestaudio/best",
@@ -160,53 +193,121 @@ async function playSong(data, title, url, startSeconds = 0) {
         "-",
         "--no-playlist",
         "--quiet",
-        "--no-warnings"
+        "--no-warnings",
+        "--extract-audio",
+        "--audio-format",
+        "mp3"
     ];
     if (startSeconds > 0) {
         args.push("--download-sections", `*${startSeconds}-inf`);
     }
     args.push(url);
 
-    const ffmpeg = spawn("yt-dlp", args);
-    data.ffmpeg = ffmpeg;
+    const proc = spawn("yt-dlp", args, {
+        stdio: ["ignore", "pipe", "pipe"]
+    });
+    return proc;
+}
 
-    ffmpeg.stderr.on("data", (output) => {
-        const text = output.toString().trim();
-        if (text) console.log("yt-dlp:", text);
-    });
-    ffmpeg.on("error", (error) => {
-        console.error("yt-dlp error:", error);
-    });
+async function playSong(data, title, url, startSeconds = 0) {
+    if (!data?.connection) {
+        throw new Error("Not connected to a voice channel.");
+    }
+    if (/youtu\.be|youtube\.com/i.test(String(url))) {
+        throw new Error("YouTube streaming is disabled.");
+    }
 
-    const resource = createAudioResource(ffmpeg.stdout, {
-        inputType: "arbitrary",
-        inlineVolume: true
-    });
+    killFfmpeg(data);
+
+    let resource = null;
+    let lastErr = null;
+
+    try {
+        console.log(`[Music] play-dl stream: ${String(url).slice(0, 80)}`);
+        const streamInfo = await streamWithPlayDl(url, startSeconds);
+        resource = createAudioResource(streamInfo.stream, {
+            inputType: streamInfo.type || StreamType.Arbitrary,
+            inlineVolume: true
+        });
+    } catch (e) {
+        lastErr = e;
+        console.warn("[Music] play-dl failed:", e?.message || e);
+    }
+
+    if (!resource) {
+        try {
+            console.log(`[Music] yt-dlp stream: ${String(url).slice(0, 80)}`);
+            const proc = streamWithYtDlp(url, startSeconds);
+            data.ffmpeg = proc;
+            proc.stderr.on("data", (chunk) => {
+                const t = chunk.toString().trim();
+                if (t) console.log("[Music] yt-dlp:", t.slice(0, 200));
+            });
+            proc.on("error", (err) => {
+                console.error("[Music] yt-dlp spawn error:", err?.message || err);
+            });
+            resource = createAudioResource(proc.stdout, {
+                inputType: StreamType.Arbitrary,
+                inlineVolume: true
+            });
+        } catch (e) {
+            lastErr = e;
+            console.warn("[Music] yt-dlp failed:", e?.message || e);
+        }
+    }
+
+    if (!resource) {
+        const err = new Error(
+            lastErr?.message ||
+                "Could not open an audio stream for that track (SoundCloud/play-dl/yt-dlp failed)."
+        );
+        err.code = "MUSIC_STREAM_FAILED";
+        throw err;
+    }
+
     if (resource.volume) {
         resource.volume.setVolume(data.volume ?? 1);
     }
 
     data.current = { title, url };
     data.player.play(resource);
+
+    try {
+        await entersState(data.player, AudioPlayerStatus.Playing, 12000);
+        console.log(`[Music] now playing: ${title}`);
+    } catch {
+        killFfmpeg(data);
+        data.current = null;
+        const err = new Error(
+            "Audio stream started but never reached Playing state. The host may be missing yt-dlp/ffmpeg or voice encryption packages."
+        );
+        err.code = "MUSIC_NOT_PLAYING";
+        throw err;
+    }
 }
 
 function destroy(guildId) {
     const data = players.get(guildId);
     if (!data) return;
 
-    if (data.ffmpeg) {
+    if (data.leaveTimer) {
+        clearTimeout(data.leaveTimer);
+        data.leaveTimer = null;
+    }
+    killFfmpeg(data);
+
+    try {
+        data.player.stop(true);
+    } catch {
+        /* ignore */
+    }
+    if (data.connection) {
         try {
-            data.ffmpeg.kill();
+            data.connection.destroy();
         } catch {
             /* ignore */
         }
     }
-
-    if (data.connection) {
-        data.connection.destroy();
-    }
-
-    data.player.stop();
     players.delete(guildId);
 }
 
