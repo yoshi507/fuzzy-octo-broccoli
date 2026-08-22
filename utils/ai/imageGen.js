@@ -15,6 +15,7 @@ const {
     generateImageToImage: cfImageToImage,
     DEFAULT_IMG2IMG_STRENGTH
 } = require("./cloudflareImage.js");
+const { enhanceImagePrompt } = require("./promptEnhance.js");
 
 const MODEL = "cloudflare-dreamshaper";
 const DEFAULT_WIDTH = 512;
@@ -65,11 +66,16 @@ async function fetchFluxImage(prompt, opts = {}) {
         throw err;
     }
 
+    const enhanced = enhanceImagePrompt(cleaned);
+    if (enhanced !== cleaned) {
+        logImg(`prompt enhanced (${cleaned.length} -> ${enhanced.length} chars)`);
+    }
+
     const width = clampDim(opts.width, DEFAULT_WIDTH);
     const height = clampDim(opts.height, DEFAULT_HEIGHT);
 
     logImg("Cloudflare Workers AI text-to-image");
-    return cfTextToImage(cleaned, {
+    return cfTextToImage(enhanced, {
         width,
         height,
         seed: opts.seed,
