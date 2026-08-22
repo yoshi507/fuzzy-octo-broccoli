@@ -1,38 +1,29 @@
-const {
-    SlashCommandBuilder
-} = require("discord.js");
-
-const { spawn } = require("child_process");
-
+const { SlashCommandBuilder } = require("discord.js");
 const {
     connect,
     getMusicData,
     playSong
 } = require("../utils/music/player.js");
+const { resolveTrack } = require("../utils/music/resolve.js");
 
 module.exports = {
     data: new SlashCommandBuilder()
         .setName("play")
-        .setDescription("Play a song")
-        .addStringOption(option =>
+        .setDescription("Play a song from SoundCloud (or Spotify link → SoundCloud)")
+        .addStringOption((option) =>
             option
                 .setName("query")
-                .setDescription("Song name or YouTube URL")
+                .setDescription("Song name, SoundCloud URL, or Spotify URL (not YouTube)")
                 .setRequired(true)
         ),
 
     async execute(interaction) {
-
-        const query =
-            interaction.options.getString("query");
-
-        const member =
-            interaction.member;
+        const query = interaction.options.getString("query");
+        const member = interaction.member;
 
         if (!member.voice.channel) {
             return interaction.reply({
-                content:
-                    "❌ You need to join a voice channel first.",
+                content: "❌ You need to join a voice channel first.",
                 ephemeral: true
             });
         }
@@ -40,153 +31,32 @@ module.exports = {
         await interaction.deferReply();
 
         try {
+            const track = await resolveTrack(query);
 
-            let videoUrl = query;
-            let title = query;
+            const data = await connect(member);
+            const music = getMusicData(member.guild.id) || data;
 
-            // =========================
-            // SEARCH YOUTUBE
-            // =========================
-
-            if (!query.startsWith("http")) {
-
-                const searchProcess =
-                    spawn("yt-dlp", [
-                        "--flat-playlist",
-                        "--print",
-                        "%(title)s|%(webpage_url)s",
-                        "--playlist-end",
-                        "1",
-                        `ytsearch1:${query}`
-                    ]);
-
-                let output = "";
-                let errorOutput = "";
-
-                searchProcess.stdout.on(
-                    "data",
-                    data => {
-                        output += data.toString();
-                    }
-                );
-
-                searchProcess.stderr.on(
-                    "data",
-                    data => {
-                        errorOutput += data.toString();
-                    }
-                );
-
-                await new Promise(
-                    (resolve, reject) => {
-
-                        searchProcess.on(
-                            "close",
-                            code => {
-
-                                if (code !== 0) {
-                                    reject(
-                                        new Error(
-                                            errorOutput ||
-                                            "YouTube search failed"
-                                        )
-                                    );
-                                } else {
-                                    resolve();
-                                }
-                            }
-                        );
-
-                        searchProcess.on(
-                            "error",
-                            reject
-                        );
-                    }
-                );
-
-                const result =
-                    output.trim();
-
-                if (!result) {
-                    return interaction.editReply(
-                        "❌ I couldn't find that song."
-                    );
-                }
-
-                const separator =
-                    result.indexOf("|");
-
-                if (separator === -1) {
-                    return interaction.editReply(
-                        "❌ I couldn't find a playable result."
-                    );
-                }
-
-                title =
-                    result
-                        .slice(0, separator)
-                        .trim();
-
-                videoUrl =
-                    result
-                        .slice(separator + 1)
-                        .trim();
-
-                if (!videoUrl.startsWith("http")) {
-                    return interaction.editReply(
-                        "❌ The search didn't return a valid YouTube URL."
-                    );
-                }
-            }
-
-            // =========================
-            // CONNECT
-            // =========================
-
-            const data =
-                await connect(member);
-
-            // =========================
-            // ADD TO QUEUE
-            // =========================
-
-            if (data.current) {
-
-                data.queue.push({
-                    title: title,
-                    url: videoUrl
+            if (music.current || music.player?.state?.status === "playing") {
+                music.queue.push({
+                    title: track.title,
+                    url: track.url
                 });
-
                 return interaction.editReply(
-                    `📋 Added **${title}** to the queue.\n` +
-                    `Position: **${data.queue.length}**`
+                    `➕ Queued **${track.title}** (\`${track.source}\`)`
                 );
             }
 
-            // =========================
-            // PLAY
-            // =========================
-
-            await playSong(
-                data,
-                title,
-                videoUrl
+            await playSong(music, track.title, track.url);
+            return interaction.editReply(
+                `▶️ Playing **${track.title}** (\`${track.source}\`)`
             );
-
-            await interaction.editReply(
-                `🎵 Now playing **${title}**`
-            );
-
-        } catch (error) {
-
-            console.error(
-                "Play command error:",
-                error
-            );
-
-            await interaction.editReply(
-                "❌ I couldn't find or play that song."
-            );
+        } catch (err) {
+            console.error("[play]", err?.code || "", err?.message || err);
+            const msg =
+                err?.code === "MUSIC_YOUTUBE_DISABLED"
+                    ? "❌ YouTube is disabled. Use a **song name**, **SoundCloud** link, or **Spotify** link."
+                    : err?.message || "Failed to play that track.";
+            return interaction.editReply(`❌ ${msg}`.replace(/^❌ ❌/, "❌"));
         }
     }
 };
