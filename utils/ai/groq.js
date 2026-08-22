@@ -11,9 +11,10 @@ const { buildSystemPrompt, DEFAULT_BASE_PROMPT } = require("../persona/store.js"
 const PRIMARY_MODEL = process.env.GROQ_MODEL || "llama-3.3-70b-versatile";
 const FALLBACK_MODELS = [
     PRIMARY_MODEL,
-    "llama-3.1-8b-instant",
     "llama-3.3-70b-versatile",
-    "openai/gpt-oss-20b"
+    "llama-3.1-8b-instant",
+    "gemma2-9b-it",
+    "llama-3.1-70b-versatile"
 ].filter((v, i, a) => v && a.indexOf(v) === i);
 
 const MODEL = PRIMARY_MODEL;
@@ -172,12 +173,24 @@ function sanitizeMessages(messages) {
 }
 
 async function createCompletion(client, model, messages, options) {
-    return client.chat.completions.create({
+    const maxTokens = Math.min(8000, Math.max(64, Number(options.maxTokens) || 1000));
+    const payload = {
         model,
         messages,
-        temperature: options.temperature ?? 0.8,
-        max_completion_tokens: options.maxTokens || 1000
-    });
+        temperature: options.temperature ?? 0.7,
+        max_tokens: maxTokens
+    };
+    try {
+        return await client.chat.completions.create(payload);
+    } catch (err) {
+        const msg = String(err?.message || err || "");
+        if (/max_tokens|max_completion/i.test(msg)) {
+            delete payload.max_tokens;
+            payload.max_completion_tokens = maxTokens;
+            return client.chat.completions.create(payload);
+        }
+        throw err;
+    }
 }
 
 async function askAI(messages, options = {}) {
