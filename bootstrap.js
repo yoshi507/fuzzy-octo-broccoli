@@ -30,6 +30,21 @@ const client = new Client({
 
 client.commands = new Collection();
 
+// Bind HTTP dashboard/API immediately so Wispbyte always has a listener on PORT,
+// even if Discord login is slow or fails.
+try {
+    const { startApiServer } = require("./api/server.js");
+    const srv = startApiServer(null);
+    if (srv) {
+        try {
+            global.__omnibotHttpServer = srv;
+        } catch (_) {}
+        console.log("[Startup] Dashboard/API bound early for Wispbyte");
+    }
+} catch (e) {
+    console.error("[Startup] Failed to start API server early:", e?.message || e);
+}
+
 const eventNameMap = {
     messageCreate: Events.MessageCreate,
     guildMemberAdd: Events.GuildMemberAdd,
@@ -40,7 +55,11 @@ const eventNameMap = {
     ready: Events.ClientReady
 };
 
-loadCommands(client);
+try {
+    loadCommands(client);
+} catch (e) {
+    console.error("[Startup] loadCommands failed:", e?.message || e);
+}
 
 const eventsPath = path.join(__dirname, "events");
 if (fs.existsSync(eventsPath)) {
@@ -79,7 +98,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
     const command = client.commands.get(interaction.commandName);
     if (!command) return;
 
-    // Defense-in-depth: enforce defaultMemberPermissions even if Discord UI is bypassed
     try {
         const { memberHasCommandPermission } = require("./utils/textCommands.js");
         if (
@@ -123,7 +141,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
 });
 
-const { registerAntiNukeListeners } = require("./utils/antiNuke.js");
-registerAntiNukeListeners(client);
+try {
+    const { registerAntiNukeListeners } = require("./utils/antiNuke.js");
+    registerAntiNukeListeners(client);
+} catch (e) {
+    console.error("[Startup] antiNuke register failed:", e?.message || e);
+}
 
 require("./startup.js")(client);
