@@ -22,8 +22,8 @@ module.exports = {
                     name: "🧠 AI",
                     value:
                         "`/ask` `/chat` `/aisummary` `/aihelp` `/aiassistant`\n" +
-                        "`/aimoderate` `/aiincident` `/aisecurity` `/clearmemory` `/imagine`\n" +
-                        "Natural: `omni explain photosynthesis` · Image: `/imagine` or `omni imagine a sunset`",
+                        "`/aimoderate` `/aiincident` `/aisecurity` `/clearmemory`\n" +
+                        "Natural: `omni explain photosynthesis` · `omni hello`",
                     inline: false
                 },
                 {

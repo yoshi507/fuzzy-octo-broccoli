@@ -14,9 +14,6 @@ const { registerSlashCommands, collectCommandJson } = require("./utils/registerS
     const cmds = collectCommandJson();
     const names = cmds.map((c) => c.name).sort();
     console.log(`Found ${cmds.length} command(s): ${names.join(", ")}`);
-    if (!names.includes("imagine")) {
-        console.warn("⚠️ /imagine is missing from the commands folder payload");
-    }
 
     const result = await registerSlashCommands({
         user: { id: process.env.CLIENT_ID || process.env.DISCORD_CLIENT_ID }
