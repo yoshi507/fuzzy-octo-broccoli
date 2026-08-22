@@ -23,6 +23,12 @@ function logCf(msg, extra) {
     else console.log(`[CloudflareAI] ${msg}`);
 }
 
+function sleep(ms) {
+    return new Promise((r) => setTimeout(r, ms));
+}
+
+const MAX_CF_ATTEMPTS = 3;
+
 function pickEnv(...names) {
     for (const name of names) {
         const raw = process.env[name];
@@ -98,7 +104,7 @@ function looksLikeImage(buf) {
     return false;
 }
 
-async function runWorkersAi(body) {
+async function runWorkersAiOnce(body) {
     const accountId = resolveAccountId();
     const token = resolveApiToken();
     if (!accountId || !token) {
@@ -162,10 +168,18 @@ async function runWorkersAi(body) {
             err.status = status;
             throw err;
         }
-        if (status === 429) {
-            const err = new Error(`Cloudflare rate limit (HTTP ${status})`);
+        const lower = String(bodyText).toLowerCase();
+        const looksLimited =
+            status === 429 ||
+            status === 503 ||
+            /rate.?limit|too many requests|quota|capacity|throttl|neuron/i.test(lower);
+        if (looksLimited) {
+            const retryAfter = res.headers.get("retry-after");
+            const err = new Error(`Cloudflare rate/capacity limit (HTTP ${status})`);
             err.code = "CF_RATE_LIMIT";
             err.status = status;
+            err.retryAfter = retryAfter ? Number(retryAfter) : null;
+            err.bodyPreview = String(bodyText).slice(0, 200);
             throw err;
         }
         const err = new Error(
@@ -230,6 +244,29 @@ async function runWorkersAi(body) {
 
     logCf(`OK binary-image ${ct} ${buffer.length} bytes`);
     return { buffer, contentType: ct, provider: "cloudflare" };
+}
+
+async function runWorkersAi(body) {
+    let lastErr;
+    for (let attempt = 1; attempt <= MAX_CF_ATTEMPTS; attempt++) {
+        try {
+            return await runWorkersAiOnce(body);
+        } catch (err) {
+            lastErr = err;
+            if (err?.code !== "CF_RATE_LIMIT" && err?.code !== "CF_TIMEOUT") throw err;
+            if (attempt >= MAX_CF_ATTEMPTS) break;
+            const waitSec = Math.min(
+                30,
+                (err.retryAfter && Number.isFinite(err.retryAfter) ? err.retryAfter : 0) ||
+                    2 * attempt
+            );
+            logCf(
+                `attempt ${attempt}/${MAX_CF_ATTEMPTS} failed (${err.code}); retrying in ${waitSec}s`
+            );
+            await sleep(waitSec * 1000);
+        }
+    }
+    throw lastErr;
 }
 
 async function generateTextToImage(prompt, opts = {}) {
