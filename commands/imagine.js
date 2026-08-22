@@ -6,27 +6,15 @@ const {
     DAILY_LIMIT,
     QUEUE_WAIT_MESSAGE
 } = require("../utils/ai/imageGen.js");
-const {
-    generateGuildVideo,
-    formatVideoUserError
-} = require("../utils/ai/videoGen.js");
 
-function normalizeTypeAndPrompt(interaction) {
-    let type = (interaction.options.getString("type") || "image").toLowerCase();
+function normalizePrompt(interaction) {
     let prompt = interaction.options.getString("prompt") || "";
-
-    if (type !== "image" && type !== "video") {
-        prompt = `${type} ${prompt}`.trim();
-        type = "image";
-    }
-
+    // Legacy: ignore old "image ..." / "video ..." prefixes users may still type
     const promptMatch = /^(image|video)[:\s]+(.+)$/i.exec(prompt.trim());
     if (promptMatch) {
-        type = promptMatch[1].toLowerCase();
         prompt = promptMatch[2].trim();
     }
-
-    return { type, prompt: String(prompt || "").trim() };
+    return String(prompt || "").trim();
 }
 
 async function safeEdit(interaction, payload) {
@@ -43,29 +31,17 @@ async function safeEdit(interaction, payload) {
 module.exports = {
     data: new SlashCommandBuilder()
         .setName("imagine")
-        .setDescription(
-            "Generate an AI image or short video — uses 1 AI request"
-        )
-        .addStringOption((option) =>
-            option
-                .setName("type")
-                .setDescription("Image or video?")
-                .setRequired(true)
-                .addChoices(
-                    { name: "Image generation", value: "image" },
-                    { name: "Video generation", value: "video" }
-                )
-        )
+        .setDescription("Generate an AI image — uses 1 AI request")
         .addStringOption((option) =>
             option
                 .setName("prompt")
-                .setDescription("What should it show?")
+                .setDescription("What should the image show?")
                 .setRequired(true)
                 .setMaxLength(500)
         ),
 
     async execute(interaction) {
-        const { type, prompt } = normalizeTypeAndPrompt(interaction);
+        const prompt = normalizePrompt(interaction);
 
         if (!interaction.guild) {
             return interaction.reply({
@@ -76,13 +52,16 @@ module.exports = {
 
         if (!prompt) {
             return interaction.reply({
-                content: "❌ Please describe what you want to generate.",
+                content: "❌ Please describe the image you want.",
                 ephemeral: true
             });
         }
 
-        if (typeof interaction.deferReply === "function") {
+        try {
             await interaction.deferReply();
+        } catch (e) {
+            console.error("[imagine] defer failed:", e?.message || e);
+            return;
         }
 
         const onQueued = async () => {
@@ -90,41 +69,6 @@ module.exports = {
         };
 
         try {
-            if (type === "video") {
-                let lastEdit = 0;
-                const onProgress = async (done, total) => {
-                    const now = Date.now();
-                    if (done < total && now - lastEdit < 4000) return;
-                    lastEdit = now;
-                    const text =
-                        done >= total
-                            ? "🎬 Rendering video…"
-                            : `🎬 Generating video... **${done}/${total}** frames`;
-                    await safeEdit(interaction, { content: text });
-                };
-
-                await safeEdit(interaction, {
-                    content: "🎬 Generating video... **0/** frames"
-                });
-
-                const { buffer, frameCount, fps, durationSeconds } =
-                    await generateGuildVideo(interaction.guild.id, prompt, {
-                        onProgress,
-                        onQueued
-                    });
-
-                const file = new AttachmentBuilder(buffer, {
-                    name: "omni-video.mp4"
-                });
-                const remaining = getRemaining(interaction.guild.id);
-                const content =
-                    `🎬 **Video generated!** (${frameCount || "?"} frames · ${fps || 6} fps · ~${Math.round(durationSeconds || 3)}s)\n` +
-                    `\`${prompt.slice(0, 120)}${prompt.length > 120 ? "…" : ""}\`\n` +
-                    `_AI requests left today: **${remaining}/${DAILY_LIMIT}**_`;
-
-                return safeEdit(interaction, { content, files: [file] });
-            }
-
             await safeEdit(interaction, { content: "🖼️ Generating image…" });
 
             const { buffer, contentType } = await generateGuildImage(
@@ -139,12 +83,12 @@ module.exports = {
                   ? "webp"
                   : "jpg";
             const file = new AttachmentBuilder(buffer, {
-                name: `omni-flux.${ext}`
+                name: `omni-image.${ext}`
             });
 
             const remaining = getRemaining(interaction.guild.id);
             const content =
-                `🖼️ **Image** (Flux) · \`${prompt.slice(0, 120)}${prompt.length > 120 ? "…" : ""}\`\n` +
+                `🖼️ **Image** · \`${prompt.slice(0, 120)}${prompt.length > 120 ? "…" : ""}\`\n` +
                 `_AI requests left today: **${remaining}/${DAILY_LIMIT}**_`;
 
             return safeEdit(interaction, { content, files: [file] });
@@ -155,11 +99,9 @@ module.exports = {
                 message: error?.message,
                 stack: error?.stack?.split("\n").slice(0, 4).join(" | ")
             });
-            const msg =
-                type === "video"
-                    ? formatVideoUserError(error)
-                    : formatImageUserError(error);
-            await safeEdit(interaction, { content: msg });
+            await safeEdit(interaction, {
+                content: formatImageUserError(error)
+            });
         }
     }
 };

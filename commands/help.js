@@ -23,7 +23,7 @@ module.exports = {
                     value:
                         "`/ask` `/chat` `/aisummary` `/aihelp` `/aiassistant`\n" +
                         "`/aimoderate` `/aiincident` `/aisecurity` `/clearmemory` `/imagine`\n" +
-                        "Natural: `omni explain photosynthesis` · Image/Video: `/imagine` (pick type) or `omni imagine image a sunset` / `omni imagine video a sunset`",
+                        "Natural: `omni explain photosynthesis` · Image: `/imagine` or `omni imagine a sunset`",
                     inline: false
                 },
                 {
