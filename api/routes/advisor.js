@@ -4,11 +4,11 @@ const { assertCanManage } = require('../middleware/guildAccess');
 const {
   analyzeGuild,
   executeActions,
-  chatAdvisor,
   formatAiUserError,
   getRemaining,
   DAILY_LIMIT
 } = require('../../utils/ai/serverAdvisor.js');
+const { chatAdvisor } = require('../../utils/ai/advisorChat.js');
 
 const router = express.Router({ mergeParams: true });
 
