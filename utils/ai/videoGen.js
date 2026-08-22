@@ -35,7 +35,8 @@ function formatVideoUserError(error) {
         error.code === "IMAGE_EMPTY" ||
         error.code === "IMAGE_TIMEOUT" ||
         error.code === "IMAGE_TOO_LARGE" ||
-        error.code === "IMAGE_PROVIDER_ERROR"
+        error.code === "IMAGE_PROVIDER_ERROR" ||
+        error.code === "IMAGE_PAYMENT_REQUIRED"
     ) {
         return formatImageUserError(error);
     }

@@ -165,6 +165,15 @@ async function fetchFluxImage(prompt, opts = {}) {
             err.status = status;
             throw err;
         }
+        if (status === 402) {
+            logImg("FAIL: Pollinations insufficient balance (HTTP 402)");
+            const err = new Error(
+                `Pollinations insufficient balance (HTTP 402): ${String(bodyText).slice(0, 200)}`
+            );
+            err.code = "IMAGE_PAYMENT_REQUIRED";
+            err.status = 402;
+            throw err;
+        }
         const err = new Error(
             `Pollinations HTTP ${status}: ${String(bodyText).slice(0, 200)}`
         );
@@ -259,6 +268,9 @@ function formatImageUserError(error) {
     }
     if (error.code === "IMAGE_RATE_LIMIT") {
         return "❌ The image service is rate-limited. Try again in a moment.";
+    }
+    if (error.code === "IMAGE_PAYMENT_REQUIRED") {
+        return "❌ Image generation is unavailable: the Pollinations account has **no remaining balance (pollen)**. An admin needs to top up at https://enter.pollinations.ai — this is not an OmniBot bug.";
     }
     if (error.code === "IMAGE_BAD_PROMPT") {
         return "❌ Please provide a description of the image you want.";
