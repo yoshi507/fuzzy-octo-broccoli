@@ -1,6 +1,6 @@
 /**
- * Light prompt enhancement for clearer, more accurate images.
- * Does not call AI — pure string rules (no AI quota cost).
+ * Structure prompts so subjects stay recognizable and well-lit.
+ * No AI call — free string rules only.
  */
 
 function enhanceImagePrompt(raw) {
@@ -9,27 +9,28 @@ function enhanceImagePrompt(raw) {
 
     const lower = prompt.toLowerCase();
 
-    // Landmark-specific anchors so structures stay recognizable
+    // Landmark-specific anchors
     if (/\bbig\s*ben\b|\belizabeth\s*tower\b/.test(lower)) {
-        if (!/gothic|clock face|parliament/i.test(prompt)) {
-            prompt +=
-                ", accurate Elizabeth Tower (Big Ben) in London: tall Gothic Revival stone clock tower with four illuminated clock faces, pointed spire, detailed stonework, Houses of Parliament at the base, River Thames nearby, correct architecture and proportions";
-        }
+        prompt =
+            "Photorealistic photo of Big Ben (Elizabeth Tower) in London, tall Gothic Revival clock tower with four clear illuminated clock faces showing correct numerals, detailed beige stone masonry, pointed neo-Gothic spire, Houses of Parliament base, River Thames in the foreground, blue sky, sharp focus, realistic architecture, correct proportions, well-lit daytime scene";
     } else if (/\beiffel\s*tower\b/.test(lower)) {
-        prompt +=
-            ", accurate Eiffel Tower iron lattice structure, full height, Paris, correct proportions";
+        prompt =
+            "Photorealistic photo of the Eiffel Tower in Paris, full iron lattice structure, accurate proportions, Champ de Mars, clear daylight, sharp detail";
     } else if (/\bstatue of liberty\b/.test(lower)) {
-        prompt +=
-            ", accurate Statue of Liberty, copper green, torch raised, New York Harbor, correct proportions";
+        prompt =
+            "Photorealistic photo of the Statue of Liberty, green copper, torch raised, New York Harbor, correct proportions, clear daylight";
     } else if (/\btaj mahal\b/.test(lower)) {
-        prompt +=
-            ", accurate white marble Taj Mahal mausoleum, central dome, minarets, Agra, correct proportions";
+        prompt =
+            "Photorealistic photo of the Taj Mahal, white marble mausoleum, central dome, four minarets, reflecting pool, Agra, clear daylight, correct proportions";
+    } else {
+        // General subjects: keep user intent, force clarity and lighting
+        prompt =
+            `Photorealistic image of ${prompt}, clear subject in frame, well-lit, natural colors, sharp focus, correct proportions, detailed, high quality`;
     }
 
-    // General quality suffix if the user prompt is short
-    if (prompt.length < 280 && !/photorealistic|highly detailed|8k/i.test(prompt)) {
-        prompt +=
-            ", photorealistic, highly detailed, sharp focus, natural lighting, correct proportions, no text, no watermark";
+    // Avoid pure black / abstract failures
+    if (!/well-lit|daylight|bright/i.test(prompt)) {
+        prompt += ", well-lit, bright clear image, visible details";
     }
 
     return prompt.slice(0, 1000);
