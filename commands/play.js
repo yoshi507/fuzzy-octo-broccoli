@@ -63,6 +63,13 @@ module.exports = {
                 msg =
                     "Search timed out. Try a direct SoundCloud link or a shorter query.";
             } else if (
+                err?.code === "MUSIC_SPOTIFY_CONFIG" ||
+                err?.code === "MUSIC_SPOTIFY_FAILED"
+            ) {
+                msg =
+                    err.message ||
+                    "Spotify is not configured. Use a song name or SoundCloud link.";
+            } else if (
                 err?.code === "MUSIC_STREAM_FAILED" ||
                 err?.code === "MUSIC_NOT_PLAYING"
             ) {
