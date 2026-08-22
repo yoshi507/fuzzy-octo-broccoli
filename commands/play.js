@@ -29,6 +29,9 @@ module.exports = {
         }
 
         await interaction.deferReply();
+        try {
+            await interaction.editReply("🔍 Searching…");
+        } catch (_) {}
 
         try {
             const track = await resolveTrack(query);
@@ -52,10 +55,14 @@ module.exports = {
             );
         } catch (err) {
             console.error("[play]", err?.code || "", err?.message || err);
-            const msg =
-                err?.code === "MUSIC_YOUTUBE_DISABLED"
-                    ? "❌ YouTube is disabled. Use a **song name**, **SoundCloud** link, or **Spotify** link."
-                    : err?.message || "Failed to play that track.";
+            let msg = err?.message || "Failed to play that track.";
+            if (err?.code === "MUSIC_YOUTUBE_DISABLED") {
+                msg =
+                    "YouTube is disabled. Use a **song name**, **SoundCloud** link, or **Spotify** link.";
+            } else if (err?.code === "TIMEOUT") {
+                msg =
+                    "Search timed out. Try a direct SoundCloud link or a shorter query.";
+            }
             return interaction.editReply(`❌ ${msg}`.replace(/^❌ ❌/, "❌"));
         }
     }

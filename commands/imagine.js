@@ -2,15 +2,16 @@ const { SlashCommandBuilder, AttachmentBuilder } = require("discord.js");
 const {
     generateGuildImage,
     formatImageUserError,
-    isImageGenerationConfigured
+    isImageGenerationConfigured,
+    QUEUE_WAIT_MESSAGE
 } = require("../utils/ai/imageGen.js");
 
 async function safeEdit(interaction, payload) {
     try {
         if (interaction.deferred || interaction.replied) {
-            return interaction.editReply(payload);
+            return await interaction.editReply(payload);
         }
-        return interaction.reply(payload);
+        return await interaction.reply(payload);
     } catch (e) {
         console.error("[imagine] Discord reply failed:", e?.message || e);
     }
@@ -47,11 +48,21 @@ module.exports = {
             return;
         }
 
+        await safeEdit(interaction, {
+            content: `🖼️ Generating… **${prompt.slice(0, 120)}**\n_This usually takes under a minute._`
+        });
+
         try {
             const { buffer, contentType } = await generateGuildImage(
                 guildId,
                 prompt,
-                {}
+                {
+                    onQueued: async () => {
+                        await safeEdit(interaction, {
+                            content: QUEUE_WAIT_MESSAGE
+                        });
+                    }
+                }
             );
             const ext = String(contentType || "").includes("jpeg")
                 ? "jpg"
