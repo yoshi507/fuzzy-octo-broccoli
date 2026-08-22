@@ -1,22 +1,29 @@
 /**
  * Cloudflare Workers AI image generation (REST).
- * Model: @cf/runwayml/stable-diffusion-v1-5-img2img
+ *
+ * Text-to-image: @cf/lykon/dreamshaper-8-lcm (fast, dedicated txt2img)
+ * Image-to-image: @cf/runwayml/stable-diffusion-v1-5-img2img
  *
  * Credentials (never log values):
  *   CLOUDFLARE_ACCOUNT_ID (or CF_ACCOUNT_ID)
  *   CLOUDFLARE_API_TOKEN (or CF_API_TOKEN / CLOUDFLARE_TOKEN)
  */
 
-const MODEL = "@cf/runwayml/stable-diffusion-v1-5-img2img";
+const TXT2IMG_MODEL = "@cf/lykon/dreamshaper-8-lcm";
+const IMG2IMG_MODEL = "@cf/runwayml/stable-diffusion-v1-5-img2img";
+/** Fallback if primary txt2img is unavailable */
+const TXT2IMG_FALLBACK_MODEL = "@cf/bytedance/stable-diffusion-xl-lightning";
+
 const DEFAULT_WIDTH = 512;
 const DEFAULT_HEIGHT = 512;
 const MAX_DIM = 512;
 /** Low strength keeps successive video frames close to the previous scene. */
 const DEFAULT_IMG2IMG_STRENGTH = 0.35;
-const DEFAULT_STEPS = 15;
+const DEFAULT_STEPS = 12;
 const DEFAULT_GUIDANCE = 7.5;
 const FETCH_TIMEOUT_MS = 120_000;
 const MAX_IMAGE_BYTES = 4 * 1024 * 1024;
+const MAX_CF_ATTEMPTS = 3;
 
 function logCf(msg, extra) {
     if (extra !== undefined) console.log(`[CloudflareAI] ${msg}`, extra);
@@ -26,8 +33,6 @@ function logCf(msg, extra) {
 function sleep(ms) {
     return new Promise((r) => setTimeout(r, ms));
 }
-
-const MAX_CF_ATTEMPTS = 3;
 
 function pickEnv(...names) {
     for (const name of names) {
@@ -104,17 +109,172 @@ function looksLikeImage(buf) {
     return false;
 }
 
-async function runWorkersAiOnce(body) {
+/**
+ * Classify Cloudflare HTTP errors carefully.
+ * Do NOT treat every mention of "neuron" as rate-limit.
+ */
+function classifyHttpError(status, bodyText, retryAfterHdr) {
+    const text = String(bodyText || "");
+    const lower = text.toLowerCase();
+
+    if (status === 401 || status === 403) {
+        const err = new Error(`Cloudflare auth failed (HTTP ${status})`);
+        err.code = "CF_AUTH_FAILED";
+        err.status = status;
+        err.bodyPreview = text.slice(0, 300);
+        return err;
+    }
+
+    // Only hard rate-limit statuses, or explicit rate-limit wording
+    const explicitRate =
+        status === 429 ||
+        /\b(rate[\s_-]?limit|too many requests|throttl)/i.test(lower);
+
+    if (explicitRate) {
+        const err = new Error(`Cloudflare rate limit (HTTP ${status})`);
+        err.code = "CF_RATE_LIMIT";
+        err.status = status;
+        err.retryAfter = retryAfterHdr ? Number(retryAfterHdr) : null;
+        err.bodyPreview = text.slice(0, 300);
+        return err;
+    }
+
+    // Capacity / model unavailable (not the same as "no neurons left")
+    if (
+        status === 503 ||
+        /\b(overloaded|capacity|temporarily unavailable|service unavailable)\b/i.test(
+            lower
+        )
+    ) {
+        const err = new Error(`Cloudflare capacity error (HTTP ${status})`);
+        err.code = "CF_CAPACITY";
+        err.status = status;
+        err.bodyPreview = text.slice(0, 300);
+        return err;
+    }
+
+    // Model / permission / account issues
+    if (
+        status === 400 ||
+        status === 404 ||
+        /\b(model|not found|unknown model|permission|unauthorized|invalid account)\b/i.test(
+            lower
+        )
+    ) {
+        const err = new Error(
+            `Cloudflare AI HTTP ${status}: ${text.slice(0, 200)}`
+        );
+        err.code =
+            status === 404 || /not found|unknown model/i.test(lower)
+                ? "CF_MODEL_ERROR"
+                : "CF_PROVIDER_ERROR";
+        err.status = status;
+        err.bodyPreview = text.slice(0, 300);
+        return err;
+    }
+
+    const err = new Error(`Cloudflare AI HTTP ${status}: ${text.slice(0, 200)}`);
+    err.code = "CF_PROVIDER_ERROR";
+    err.status = status;
+    err.bodyPreview = text.slice(0, 300);
+    return err;
+}
+
+async function parseSuccessResponse(res, contentType) {
+    if (contentType.includes("json")) {
+        let json;
+        try {
+            json = await res.json();
+        } catch {
+            const err = new Error("Cloudflare returned invalid JSON");
+            err.code = "CF_PROVIDER_ERROR";
+            throw err;
+        }
+
+        // success:false JSON body
+        if (json && json.success === false) {
+            const msg =
+                json?.errors?.[0]?.message ||
+                JSON.stringify(json).slice(0, 200);
+            console.error("[CloudflareAI] success=false:", msg);
+            const err = classifyHttpError(400, msg, null);
+            throw err;
+        }
+
+        const b64 =
+            (typeof json?.result === "string" && json.result) ||
+            json?.result?.image ||
+            json?.image ||
+            null;
+        if (!b64 || typeof b64 !== "string") {
+            console.error(
+                "[CloudflareAI] unexpected JSON:",
+                JSON.stringify(json).slice(0, 300)
+            );
+            const err = new Error("Cloudflare JSON response missing image data");
+            err.code = "CF_PROVIDER_ERROR";
+            throw err;
+        }
+        const buffer = Buffer.from(
+            b64.replace(/^data:image\/\w+;base64,/, ""),
+            "base64"
+        );
+        if (!looksLikeImage(buffer)) {
+            const err = new Error("Cloudflare JSON did not contain a valid image");
+            err.code = "CF_PROVIDER_ERROR";
+            throw err;
+        }
+        logCf(`OK json-image ${buffer.length} bytes`);
+        return { buffer, contentType: "image/png", provider: "cloudflare" };
+    }
+
+    const ab = await res.arrayBuffer();
+    if (ab.byteLength > MAX_IMAGE_BYTES) {
+        const err = new Error(`Cloudflare image too large (${ab.byteLength})`);
+        err.code = "CF_TOO_LARGE";
+        throw err;
+    }
+    const buffer = Buffer.from(ab);
+    if (!buffer.length || !looksLikeImage(buffer)) {
+        const preview = buffer.toString("utf8", 0, 200);
+        console.error("[CloudflareAI] non-image body preview:", preview);
+        const err = new Error("Cloudflare returned non-image data");
+        err.code = "CF_PROVIDER_ERROR";
+        throw err;
+    }
+
+    let ct = contentType || "image/png";
+    if (buffer[0] === 0x89 && buffer[1] === 0x50) ct = "image/png";
+    else if (buffer[0] === 0xff && buffer[1] === 0xd8) ct = "image/jpeg";
+
+    logCf(`OK binary-image ${ct} ${buffer.length} bytes`);
+    return { buffer, contentType: ct, provider: "cloudflare" };
+}
+
+async function runWorkersAiOnce(model, body) {
     const accountId = resolveAccountId();
     const token = resolveApiToken();
     if (!accountId || !token) {
-        const err = new Error("CLOUDFLARE_ACCOUNT_ID / CLOUDFLARE_API_TOKEN not configured");
+        const err = new Error(
+            "CLOUDFLARE_ACCOUNT_ID / CLOUDFLARE_API_TOKEN not configured"
+        );
         err.code = "CF_NOT_CONFIGURED";
         throw err;
     }
 
-    const url = `https://api.cloudflare.com/client/v4/accounts/${accountId}/ai/run/${MODEL}`;
-    logCf(`POST model=${MODEL} hasImage=${Boolean(body.image_b64)} ${body.width}x${body.height}`);
+    // Account IDs are typically 32 hex chars — warn if clearly wrong shape
+    if (!/^[a-f0-9]{32}$/i.test(accountId)) {
+        logCf(
+            `WARN account id length=${accountId.length} (expected 32 hex chars from Cloudflare dashboard URL)`
+        );
+    }
+
+    const url = `https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(
+        accountId
+    )}/ai/run/${model}`;
+    logCf(
+        `POST model=${model} hasImage=${Boolean(body.image_b64)} ${body.width}x${body.height} steps=${body.num_steps}`
+    );
 
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
@@ -148,7 +308,10 @@ async function runWorkersAiOnce(body) {
 
     const status = res.status;
     const contentType = (res.headers.get("content-type") || "").split(";")[0];
-    logCf(`response status=${status} content-type=${contentType || "unknown"}`);
+    const retryAfterHdr = res.headers.get("retry-after");
+    logCf(
+        `response status=${status} content-type=${contentType || "unknown"} retryAfter=${retryAfterHdr || "none"}`
+    );
 
     if (!res.ok) {
         let bodyText = "";
@@ -161,107 +324,33 @@ async function runWorkersAiOnce(body) {
             `[CloudflareAI] HTTP ${status}:`,
             String(bodyText).slice(0, 500)
         );
-
-        if (status === 401 || status === 403) {
-            const err = new Error(`Cloudflare auth failed (HTTP ${status})`);
-            err.code = "CF_AUTH_FAILED";
-            err.status = status;
-            throw err;
-        }
-        const lower = String(bodyText).toLowerCase();
-        const looksLimited =
-            status === 429 ||
-            status === 503 ||
-            /rate.?limit|too many requests|quota|capacity|throttl|neuron/i.test(lower);
-        if (looksLimited) {
-            const retryAfter = res.headers.get("retry-after");
-            const err = new Error(`Cloudflare rate/capacity limit (HTTP ${status})`);
-            err.code = "CF_RATE_LIMIT";
-            err.status = status;
-            err.retryAfter = retryAfter ? Number(retryAfter) : null;
-            err.bodyPreview = String(bodyText).slice(0, 200);
-            throw err;
-        }
-        const err = new Error(
-            `Cloudflare AI HTTP ${status}: ${String(bodyText).slice(0, 200)}`
-        );
-        err.code = "CF_PROVIDER_ERROR";
-        err.status = status;
-        throw err;
+        throw classifyHttpError(status, bodyText, retryAfterHdr);
     }
 
-    if (contentType.includes("json")) {
-        let json;
-        try {
-            json = await res.json();
-        } catch (e) {
-            const err = new Error("Cloudflare returned invalid JSON");
-            err.code = "CF_PROVIDER_ERROR";
-            throw err;
-        }
-        const b64 =
-            (typeof json?.result === "string" && json.result) ||
-            json?.result?.image ||
-            json?.image ||
-            null;
-        if (!b64 || typeof b64 !== "string") {
-            console.error(
-                "[CloudflareAI] unexpected JSON:",
-                JSON.stringify(json).slice(0, 300)
-            );
-            const err = new Error("Cloudflare JSON response missing image data");
-            err.code = "CF_PROVIDER_ERROR";
-            throw err;
-        }
-        const buffer = Buffer.from(b64.replace(/^data:image\/\w+;base64,/, ""), "base64");
-        if (!looksLikeImage(buffer)) {
-            const err = new Error("Cloudflare JSON did not contain a valid image");
-            err.code = "CF_PROVIDER_ERROR";
-            throw err;
-        }
-        logCf(`OK json-image ${buffer.length} bytes`);
-        return { buffer, contentType: "image/png", provider: "cloudflare" };
-    }
-
-    const ab = await res.arrayBuffer();
-    if (ab.byteLength > MAX_IMAGE_BYTES) {
-        const err = new Error(`Cloudflare image too large (${ab.byteLength})`);
-        err.code = "CF_TOO_LARGE";
-        throw err;
-    }
-    const buffer = Buffer.from(ab);
-    if (!buffer.length || !looksLikeImage(buffer)) {
-        const preview = buffer.toString("utf8", 0, 200);
-        console.error("[CloudflareAI] non-image body preview:", preview);
-        const err = new Error("Cloudflare returned non-image data");
-        err.code = "CF_PROVIDER_ERROR";
-        throw err;
-    }
-
-    let ct = contentType || "image/png";
-    if (buffer[0] === 0x89 && buffer[1] === 0x50) ct = "image/png";
-    else if (buffer[0] === 0xff && buffer[1] === 0xd8) ct = "image/jpeg";
-
-    logCf(`OK binary-image ${ct} ${buffer.length} bytes`);
-    return { buffer, contentType: ct, provider: "cloudflare" };
+    return parseSuccessResponse(res, contentType);
 }
 
-async function runWorkersAi(body) {
+async function runWorkersAi(model, body) {
     let lastErr;
     for (let attempt = 1; attempt <= MAX_CF_ATTEMPTS; attempt++) {
         try {
-            return await runWorkersAiOnce(body);
+            return await runWorkersAiOnce(model, body);
         } catch (err) {
             lastErr = err;
-            if (err?.code !== "CF_RATE_LIMIT" && err?.code !== "CF_TIMEOUT") throw err;
+            const retryable =
+                err?.code === "CF_RATE_LIMIT" ||
+                err?.code === "CF_TIMEOUT" ||
+                err?.code === "CF_CAPACITY";
+            if (!retryable) throw err;
             if (attempt >= MAX_CF_ATTEMPTS) break;
             const waitSec = Math.min(
-                30,
-                (err.retryAfter && Number.isFinite(err.retryAfter) ? err.retryAfter : 0) ||
-                    2 * attempt
+                20,
+                (err.retryAfter && Number.isFinite(err.retryAfter)
+                    ? err.retryAfter
+                    : 0) || 2 * attempt
             );
             logCf(
-                `attempt ${attempt}/${MAX_CF_ATTEMPTS} failed (${err.code}); retrying in ${waitSec}s`
+                `attempt ${attempt}/${MAX_CF_ATTEMPTS} failed (${err.code} status=${err.status || "?"}); retrying in ${waitSec}s`
             );
             await sleep(waitSec * 1000);
         }
@@ -270,7 +359,9 @@ async function runWorkersAi(body) {
 }
 
 async function generateTextToImage(prompt, opts = {}) {
-    const cleaned = String(prompt || "").trim().slice(0, 1000);
+    const cleaned = String(prompt || "")
+        .trim()
+        .slice(0, 1000);
     if (!cleaned) {
         const err = new Error("Prompt is required");
         err.code = "IMAGE_BAD_PROMPT";
@@ -293,11 +384,28 @@ async function generateTextToImage(prompt, opts = {}) {
         body.negative_prompt = String(opts.negativePrompt).slice(0, 500);
     }
 
-    return runWorkersAi(body);
+    try {
+        return await runWorkersAi(TXT2IMG_MODEL, body);
+    } catch (err) {
+        // If primary model missing / broken, try lightning fallback once
+        if (
+            err?.code === "CF_MODEL_ERROR" ||
+            err?.status === 404 ||
+            err?.code === "CF_PROVIDER_ERROR"
+        ) {
+            logCf(
+                `primary txt2img failed (${err.code || err.status}); trying fallback ${TXT2IMG_FALLBACK_MODEL}`
+            );
+            return runWorkersAi(TXT2IMG_FALLBACK_MODEL, body);
+        }
+        throw err;
+    }
 }
 
 async function generateImageToImage(prompt, imageBuffer, opts = {}) {
-    const cleaned = String(prompt || "").trim().slice(0, 1000);
+    const cleaned = String(prompt || "")
+        .trim()
+        .slice(0, 1000);
     if (!cleaned) {
         const err = new Error("Prompt is required");
         err.code = "IMAGE_BAD_PROMPT";
@@ -332,11 +440,13 @@ async function generateImageToImage(prompt, imageBuffer, opts = {}) {
     }
 
     logCf(`img2img strength=${strength}`);
-    return runWorkersAi(body);
+    return runWorkersAi(IMG2IMG_MODEL, body);
 }
 
 module.exports = {
-    MODEL,
+    MODEL: TXT2IMG_MODEL,
+    TXT2IMG_MODEL,
+    IMG2IMG_MODEL,
     DEFAULT_WIDTH,
     DEFAULT_HEIGHT,
     DEFAULT_IMG2IMG_STRENGTH,

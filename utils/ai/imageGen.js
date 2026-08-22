@@ -16,7 +16,7 @@ const {
     DEFAULT_IMG2IMG_STRENGTH
 } = require("./cloudflareImage.js");
 
-const MODEL = "cloudflare-sd15";
+const MODEL = "cloudflare-dreamshaper";
 const DEFAULT_WIDTH = 512;
 const DEFAULT_HEIGHT = 512;
 const MAX_DIM = 512;
@@ -183,10 +183,16 @@ function formatImageUserError(error) {
         return "❌ Image generation is not configured. Set `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN` on the host, then restart OmniBot.";
     }
     if (error.code === "IMAGE_AUTH_FAILED" || error.code === "CF_AUTH_FAILED") {
-        return "❌ Cloudflare authentication failed. Check `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN`.";
+        return "❌ Cloudflare authentication failed. Check `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN` (token needs Workers AI Edit permission).";
     }
     if (error.code === "IMAGE_RATE_LIMIT" || error.code === "CF_RATE_LIMIT") {
-        return "❌ Cloudflare Workers AI is rate-limited or out of capacity right now. Wait a minute and try again. (Check Cloudflare dashboard → Workers AI usage/neurons if this keeps happening.)";
+        return "❌ Cloudflare is rate-limiting requests right now. Wait about a minute and try one image again.";
+    }
+    if (error.code === "CF_CAPACITY") {
+        return "❌ Cloudflare Workers AI is temporarily at capacity. Please try again in a moment.";
+    }
+    if (error.code === "CF_MODEL_ERROR") {
+        return "❌ Cloudflare rejected the image model request. Check that Workers AI is enabled on the account and the API token has Workers AI permissions.";
     }
     if (error.code === "IMAGE_BAD_PROMPT") {
         return "❌ Please provide a description of the image you want.";
