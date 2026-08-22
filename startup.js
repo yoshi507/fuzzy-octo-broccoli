@@ -117,8 +117,8 @@ function attachClientDiagnostics(client) {
             console.error("[DeadChat] start failed:", e?.message || e);
         }
     };
+    // discord.js v14+: use clientReady ("ready" is deprecated and will be removed in v15)
     client.once("clientReady", onReady);
-    client.once("ready", onReady);
 }
 
 module.exports = function boot(client) {
