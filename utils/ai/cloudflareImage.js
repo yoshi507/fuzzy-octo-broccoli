@@ -1,29 +1,29 @@
 /**
  * Cloudflare Workers AI image generation (REST).
- *
- * Text-to-image: @cf/lykon/dreamshaper-8-lcm (fast, dedicated txt2img)
- * Image-to-image: @cf/runwayml/stable-diffusion-v1-5-img2img
- *
- * Credentials (never log values):
- *   CLOUDFLARE_ACCOUNT_ID (or CF_ACCOUNT_ID)
- *   CLOUDFLARE_API_TOKEN (or CF_API_TOKEN / CLOUDFLARE_TOKEN)
+ * Primary: Stable Diffusion XL (clearer subjects, fewer black messes)
+ * Fallbacks: SDXL Lightning, Dreamshaper LCM
  */
 
-const TXT2IMG_MODEL = "@cf/lykon/dreamshaper-8-lcm";
+const TXT2IMG_MODEL = "@cf/stabilityai/stable-diffusion-xl-base-1.0";
 const IMG2IMG_MODEL = "@cf/runwayml/stable-diffusion-v1-5-img2img";
-/** Fallback if primary txt2img is unavailable */
 const TXT2IMG_FALLBACK_MODEL = "@cf/bytedance/stable-diffusion-xl-lightning";
+const TXT2IMG_FALLBACK_MODEL_2 = "@cf/lykon/dreamshaper-8-lcm";
 
-const DEFAULT_WIDTH = 512;
-const DEFAULT_HEIGHT = 512;
-const MAX_DIM = 512;
-/** Low strength keeps successive video frames close to the previous scene. */
+const DEFAULT_WIDTH = 768;
+const DEFAULT_HEIGHT = 768;
+const MAX_DIM = 1024;
 const DEFAULT_IMG2IMG_STRENGTH = 0.35;
-const DEFAULT_STEPS = 12;
+const DEFAULT_STEPS = 20;
 const DEFAULT_GUIDANCE = 7.5;
 const FETCH_TIMEOUT_MS = 120_000;
-const MAX_IMAGE_BYTES = 4 * 1024 * 1024;
+const MAX_IMAGE_BYTES = 6 * 1024 * 1024;
 const MAX_CF_ATTEMPTS = 3;
+
+const DEFAULT_NEGATIVE =
+    "blurry, out of focus, low quality, low resolution, jpeg artifacts, noise, grain, " +
+    "underexposed, overexposed, pure black, black void, dark mess, silhouette only, " +
+    "distorted, deformed, disfigured, mutated, extra limbs, bad anatomy, " +
+    "text, watermark, logo, signature, cropped, ugly, duplicate";
 
 function logCf(msg, extra) {
     if (extra !== undefined) console.log(`[CloudflareAI] ${msg}`, extra);
@@ -68,7 +68,6 @@ function isCloudflareConfigured() {
     return Boolean(resolveAccountId() && resolveApiToken());
 }
 
-/** Safe status for logs - never prints secrets. */
 function getCloudflareStatus() {
     const account = resolveAccountId();
     const token = resolveApiToken();
@@ -83,7 +82,8 @@ function getCloudflareStatus() {
 
 function clampDim(n, fallback) {
     const v = Number(n) || fallback;
-    return Math.min(MAX_DIM, Math.max(256, Math.floor(v)));
+    const clamped = Math.min(MAX_DIM, Math.max(512, Math.floor(v)));
+    return Math.round(clamped / 64) * 64;
 }
 
 function clampStrength(n) {
@@ -109,10 +109,6 @@ function looksLikeImage(buf) {
     return false;
 }
 
-/**
- * Classify Cloudflare HTTP errors carefully.
- * Do NOT treat every mention of "neuron" as rate-limit.
- */
 function classifyHttpError(status, bodyText, retryAfterHdr) {
     const text = String(bodyText || "");
     const lower = text.toLowerCase();
@@ -125,7 +121,6 @@ function classifyHttpError(status, bodyText, retryAfterHdr) {
         return err;
     }
 
-    // Only hard rate-limit statuses, or explicit rate-limit wording
     const explicitRate =
         status === 429 ||
         /\b(rate[\s_-]?limit|too many requests|throttl)/i.test(lower);
@@ -139,12 +134,9 @@ function classifyHttpError(status, bodyText, retryAfterHdr) {
         return err;
     }
 
-    // Capacity / model unavailable (not the same as "no neurons left")
     if (
         status === 503 ||
-        /\b(overloaded|capacity|temporarily unavailable|service unavailable)\b/i.test(
-            lower
-        )
+        /\b(overloaded|capacity|temporarily unavailable|service unavailable)\b/i.test(lower)
     ) {
         const err = new Error(`Cloudflare capacity error (HTTP ${status})`);
         err.code = "CF_CAPACITY";
@@ -153,17 +145,12 @@ function classifyHttpError(status, bodyText, retryAfterHdr) {
         return err;
     }
 
-    // Model / permission / account issues
     if (
         status === 400 ||
         status === 404 ||
-        /\b(model|not found|unknown model|permission|unauthorized|invalid account)\b/i.test(
-            lower
-        )
+        /\b(model|not found|unknown model|permission|unauthorized|invalid account)\b/i.test(lower)
     ) {
-        const err = new Error(
-            `Cloudflare AI HTTP ${status}: ${text.slice(0, 200)}`
-        );
+        const err = new Error(`Cloudflare AI HTTP ${status}: ${text.slice(0, 200)}`);
         err.code =
             status === 404 || /not found|unknown model/i.test(lower)
                 ? "CF_MODEL_ERROR"
@@ -191,14 +178,11 @@ async function parseSuccessResponse(res, contentType) {
             throw err;
         }
 
-        // success:false JSON body
         if (json && json.success === false) {
             const msg =
-                json?.errors?.[0]?.message ||
-                JSON.stringify(json).slice(0, 200);
+                json?.errors?.[0]?.message || JSON.stringify(json).slice(0, 200);
             console.error("[CloudflareAI] success=false:", msg);
-            const err = classifyHttpError(400, msg, null);
-            throw err;
+            throw classifyHttpError(400, msg, null);
         }
 
         const b64 =
@@ -262,7 +246,6 @@ async function runWorkersAiOnce(model, body) {
         throw err;
     }
 
-    // Account IDs are typically 32 hex chars — warn if clearly wrong shape
     if (!/^[a-f0-9]{32}$/i.test(accountId)) {
         logCf(
             `WARN account id length=${accountId.length} (expected 32 hex chars from Cloudflare dashboard URL)`
@@ -359,9 +342,7 @@ async function runWorkersAi(model, body) {
 }
 
 async function generateTextToImage(prompt, opts = {}) {
-    const cleaned = String(prompt || "")
-        .trim()
-        .slice(0, 1000);
+    const cleaned = String(prompt || "").trim().slice(0, 1000);
     if (!cleaned) {
         const err = new Error("Prompt is required");
         err.code = "IMAGE_BAD_PROMPT";
@@ -374,38 +355,37 @@ async function generateTextToImage(prompt, opts = {}) {
         prompt: cleaned,
         width,
         height,
-        num_steps: Math.min(20, Math.max(1, Number(opts.steps) || DEFAULT_STEPS)),
-        guidance: Number(opts.guidance) || DEFAULT_GUIDANCE
+        num_steps: Math.min(20, Math.max(8, Number(opts.steps) || DEFAULT_STEPS)),
+        guidance: Number(opts.guidance) || DEFAULT_GUIDANCE,
+        negative_prompt: String(opts.negativePrompt || DEFAULT_NEGATIVE).slice(0, 800)
     };
     if (opts.seed != null && Number.isFinite(Number(opts.seed))) {
         body.seed = Math.floor(Number(opts.seed));
     }
-    if (opts.negativePrompt) {
-        body.negative_prompt = String(opts.negativePrompt).slice(0, 500);
-    }
 
-    try {
-        return await runWorkersAi(TXT2IMG_MODEL, body);
-    } catch (err) {
-        // If primary model missing / broken, try lightning fallback once
-        if (
-            err?.code === "CF_MODEL_ERROR" ||
-            err?.status === 404 ||
-            err?.code === "CF_PROVIDER_ERROR"
-        ) {
-            logCf(
-                `primary txt2img failed (${err.code || err.status}); trying fallback ${TXT2IMG_FALLBACK_MODEL}`
-            );
-            return runWorkersAi(TXT2IMG_FALLBACK_MODEL, body);
+    const models = [TXT2IMG_MODEL, TXT2IMG_FALLBACK_MODEL, TXT2IMG_FALLBACK_MODEL_2];
+    let lastErr;
+    for (const model of models) {
+        try {
+            return await runWorkersAi(model, body);
+        } catch (err) {
+            lastErr = err;
+            if (
+                err?.code === "CF_MODEL_ERROR" ||
+                err?.status === 404 ||
+                err?.code === "CF_PROVIDER_ERROR"
+            ) {
+                logCf(`model ${model} failed (${err.code || err.status}); trying next`);
+                continue;
+            }
+            throw err;
         }
-        throw err;
     }
+    throw lastErr;
 }
 
 async function generateImageToImage(prompt, imageBuffer, opts = {}) {
-    const cleaned = String(prompt || "")
-        .trim()
-        .slice(0, 1000);
+    const cleaned = String(prompt || "").trim().slice(0, 1000);
     if (!cleaned) {
         const err = new Error("Prompt is required");
         err.code = "IMAGE_BAD_PROMPT";
@@ -417,8 +397,8 @@ async function generateImageToImage(prompt, imageBuffer, opts = {}) {
         throw err;
     }
 
-    const width = clampDim(opts.width, DEFAULT_WIDTH);
-    const height = clampDim(opts.height, DEFAULT_HEIGHT);
+    const width = clampDim(opts.width, 512);
+    const height = clampDim(opts.height, 512);
     const strength = clampStrength(
         opts.strength != null ? opts.strength : DEFAULT_IMG2IMG_STRENGTH
     );
@@ -427,16 +407,14 @@ async function generateImageToImage(prompt, imageBuffer, opts = {}) {
         prompt: cleaned,
         width,
         height,
-        num_steps: Math.min(20, Math.max(1, Number(opts.steps) || DEFAULT_STEPS)),
+        num_steps: Math.min(20, Math.max(8, Number(opts.steps) || DEFAULT_STEPS)),
         guidance: Number(opts.guidance) || DEFAULT_GUIDANCE,
         strength,
+        negative_prompt: String(opts.negativePrompt || DEFAULT_NEGATIVE).slice(0, 800),
         image_b64: Buffer.from(imageBuffer).toString("base64")
     };
     if (opts.seed != null && Number.isFinite(Number(opts.seed))) {
         body.seed = Math.floor(Number(opts.seed));
-    }
-    if (opts.negativePrompt) {
-        body.negative_prompt = String(opts.negativePrompt).slice(0, 500);
     }
 
     logCf(`img2img strength=${strength}`);
