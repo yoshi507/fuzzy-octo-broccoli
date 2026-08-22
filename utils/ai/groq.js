@@ -8,13 +8,17 @@ const {
 } = require("./aiLimit.js");
 const { buildSystemPrompt, DEFAULT_BASE_PROMPT } = require("../persona/store.js");
 
-const PRIMARY_MODEL = process.env.GROQ_MODEL || "llama-3.3-70b-versatile";
+// Prefer current Groq production chat models (see console.groq.com/docs/models).
+// Older llama-*/gemma* ids are often decommissioned and return model_not_found.
+const PRIMARY_MODEL = process.env.GROQ_MODEL || "openai/gpt-oss-20b";
 const FALLBACK_MODELS = [
     PRIMARY_MODEL,
-    "llama-3.3-70b-versatile",
+    "openai/gpt-oss-20b",
+    "openai/gpt-oss-120b",
     "llama-3.1-8b-instant",
-    "gemma2-9b-it",
-    "llama-3.1-70b-versatile"
+    "llama-3.3-70b-versatile",
+    "meta-llama/llama-4-scout-17b-16e-instruct",
+    "qwen/qwen3-32b"
 ].filter((v, i, a) => v && a.indexOf(v) === i);
 
 const MODEL = PRIMARY_MODEL;
@@ -102,9 +106,15 @@ function isAuthError(error) {
 function isModelError(error) {
     const info = extractProviderError(error);
     const msg = info.message.toLowerCase();
+    // Do not treat request-parameter errors as "model unavailable"
+    if (/max_tokens|max_completion|temperature|invalid parameter|unsupported parameter/.test(msg)) {
+        return false;
+    }
     return (
         info.code === "model_not_found" ||
-        /model_not_found|does not exist|invalid model|decommissioned|not supported/.test(msg)
+        /model_not_found|model does not exist|unknown model|decommissioned|no longer available|model_decommissioned/.test(
+            msg
+        )
     );
 }
 
@@ -181,16 +191,26 @@ async function createCompletion(client, model, messages, options) {
     const payload = {
         model,
         messages,
-        temperature: options.temperature ?? 0.7,
-        max_tokens: maxTokens
+        temperature: options.temperature ?? 0.7
     };
+    // gpt-oss and many current Groq models prefer max_completion_tokens
+    if (String(model).startsWith("openai/") || String(model).includes("gpt-oss")) {
+        payload.max_completion_tokens = maxTokens;
+    } else {
+        payload.max_tokens = maxTokens;
+    }
     try {
         return await client.chat.completions.create(payload);
     } catch (err) {
         const msg = String(err?.message || err || "");
         if (/max_tokens|max_completion/i.test(msg)) {
             delete payload.max_tokens;
-            payload.max_completion_tokens = maxTokens;
+            delete payload.max_completion_tokens;
+            if (/max_completion/i.test(msg)) {
+                payload.max_tokens = maxTokens;
+            } else {
+                payload.max_completion_tokens = maxTokens;
+            }
             return client.chat.completions.create(payload);
         }
         throw err;
