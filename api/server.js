@@ -107,7 +107,10 @@ function createApiApp(discordClient) {
   app.use('/guilds/:guildId/advisor', advisorRoutes);
   app.use('/guilds/:guildId/bot', botRouter);
   app.use('/guilds/:guildId/stats', statsRouter);
+  // Dashboard calls /appeals/* and /advertise/* (also keep /public/* aliases)
+  app.use('/appeals', publicAppealsRoutes);
   app.use('/public/appeals', publicAppealsRoutes);
+  app.use('/advertise', publicAdvertiseRoutes);
   app.use('/public/advertise', publicAdvertiseRoutes);
 
   const dashDir = path.join(__dirname, '../public/dashboard');
