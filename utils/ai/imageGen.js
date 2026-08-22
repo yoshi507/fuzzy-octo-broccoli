@@ -1,6 +1,6 @@
 /**
- * AI image generation — Home Mode preferred, Cloudflare fallback.
- * ONE job at a time via generationQueue.
+ * AI image generation — Home Mode API only (no Cloudflare).
+ * ONE job at a time via generationQueue with hard timeouts.
  */
 
 const { canUseAI, useAI, getRemaining, DAILY_LIMIT } = require("./aiLimit.js");
@@ -13,19 +13,13 @@ const {
     getHomeModeStatus,
     generateHomeModeImage
 } = require("./homeModeImage.js");
-const {
-    isCloudflareConfigured,
-    getCloudflareStatus,
-    generateTextToImage: cfTextToImage,
-    generateImageToImage: cfImageToImage,
-    DEFAULT_IMG2IMG_STRENGTH
-} = require("./cloudflareImage.js");
 const { enhanceImagePrompt } = require("./promptEnhance.js");
 
-const MODEL = "cloudflare-dreamshaper";
-const DEFAULT_WIDTH = 512;
-const DEFAULT_HEIGHT = 512;
-const MAX_DIM = 512;
+const MODEL = "home-mode";
+const DEFAULT_WIDTH = 1024;
+const DEFAULT_HEIGHT = 1024;
+const MAX_DIM = 1024;
+const JOB_TIMEOUT_MS = 55_000;
 
 function logImg(msg, extra) {
     if (extra !== undefined) console.log(`[ImageGen] ${msg}`, extra);
@@ -42,24 +36,34 @@ function logProviderStatusOnce() {
     if (providerStatusLogged) return;
     providerStatusLogged = true;
     const hm = getHomeModeStatus();
-    const cf = getCloudflareStatus();
     logImg(
         `provider homemode=${hm.configured ? "yes" : "no"}` +
-            ` cloudflare=${cf.configured ? "yes" : "no"}`
+            ` path=${hm.path || "n/a"}`
     );
-    if (!hm.configured && !cf.configured) {
+    if (!hm.configured) {
         logImg(
-            "HINT: set HOME_MODE_API_URL + HOME_MODE_API_KEY (preferred) or Cloudflare credentials, then restart"
+            "HINT: set HOME_MODE_API_URL + HOME_MODE_API_KEY on the host, then fully restart"
         );
     }
 }
 
-/** Text-to-image. Name kept for compatibility. */
+function isImageGenerationConfigured() {
+    return isHomeModeConfigured();
+}
+
 async function fetchFluxImage(prompt, opts = {}) {
     const cleaned = String(prompt || "").trim();
     if (!cleaned) {
         const err = new Error("Prompt is required");
         err.code = "IMAGE_BAD_PROMPT";
+        throw err;
+    }
+
+    if (!isHomeModeConfigured()) {
+        const err = new Error(
+            "HOME_MODE_API_URL / HOME_MODE_API_KEY not configured"
+        );
+        err.code = "IMAGE_NOT_CONFIGURED";
         throw err;
     }
 
@@ -71,28 +75,8 @@ async function fetchFluxImage(prompt, opts = {}) {
     const width = clampDim(opts.width, DEFAULT_WIDTH);
     const height = clampDim(opts.height, DEFAULT_HEIGHT);
 
-    if (isHomeModeConfigured()) {
-        logImg("Home Mode image API");
-        return generateHomeModeImage(enhanced, {
-            width,
-            height,
-            seed: opts.seed,
-            steps: opts.steps,
-            guidance: opts.guidance,
-            negativePrompt: opts.negativePrompt
-        });
-    }
-
-    if (!isCloudflareConfigured()) {
-        const err = new Error(
-            "HOME_MODE_API_URL / HOME_MODE_API_KEY (or Cloudflare) not configured"
-        );
-        err.code = "IMAGE_NOT_CONFIGURED";
-        throw err;
-    }
-
-    logImg("Cloudflare Workers AI text-to-image");
-    return cfTextToImage(enhanced, {
+    logImg("Home Mode image API");
+    return generateHomeModeImage(enhanced, {
         width,
         height,
         seed: opts.seed,
@@ -102,38 +86,10 @@ async function fetchFluxImage(prompt, opts = {}) {
     });
 }
 
+/** img2img not available without Cloudflare */
 async function fetchImg2Img(prompt, referenceBuffer, opts = {}) {
-    const cleaned = String(prompt || "").trim();
-    if (!cleaned) {
-        const err = new Error("Prompt is required");
-        err.code = "IMAGE_BAD_PROMPT";
-        throw err;
-    }
-
-    if (!isCloudflareConfigured()) {
-        const err = new Error(
-            "CLOUDFLARE_ACCOUNT_ID / CLOUDFLARE_API_TOKEN not configured"
-        );
-        err.code = "IMAGE_NOT_CONFIGURED";
-        throw err;
-    }
-
-    if (!referenceBuffer?.length) {
-        logImg("img2img missing reference - falling back to text-to-image");
-        return fetchFluxImage(cleaned, opts);
-    }
-
-    logImg("Cloudflare Workers AI img2img");
-    return cfImageToImage(cleaned, referenceBuffer, {
-        width: clampDim(opts.width, DEFAULT_WIDTH),
-        height: clampDim(opts.height, DEFAULT_HEIGHT),
-        strength:
-            opts.strength != null ? opts.strength : DEFAULT_IMG2IMG_STRENGTH,
-        seed: opts.seed,
-        steps: opts.steps,
-        guidance: opts.guidance,
-        negativePrompt: opts.negativePrompt
-    });
+    logImg("img2img not available — falling back to text-to-image");
+    return fetchFluxImage(prompt, opts);
 }
 
 async function generateGuildImage(guildId, prompt, opts = {}) {
@@ -153,7 +109,7 @@ async function generateGuildImage(guildId, prompt, opts = {}) {
         throw err;
     }
 
-    if (!isHomeModeConfigured() && !isCloudflareConfigured()) {
+    if (!isHomeModeConfigured()) {
         const err = new Error(
             "No image provider configured (set HOME_MODE_API_URL + HOME_MODE_API_KEY)"
         );
@@ -179,12 +135,12 @@ async function generateGuildImage(guildId, prompt, opts = {}) {
 
             if (guildId) useAI(guildId);
             logImg(
-                `queued job done guild=${guildId || "n/a"} provider=${result.provider || "cloudflare"}`
+                `queued job done guild=${guildId || "n/a"} provider=${result.provider || "homemode"}`
             );
             return result;
         },
         "image",
-        { onQueued: opts.onQueued }
+        { onQueued: opts.onQueued, timeoutMs: JOB_TIMEOUT_MS }
     );
 }
 
@@ -198,49 +154,31 @@ function formatImageUserError(error) {
             return "❌ This server has reached its daily AI limit. Try again tomorrow.";
         }
     }
-    if (
-        error.code === "IMAGE_NOT_CONFIGURED" ||
-        error.code === "CF_NOT_CONFIGURED"
-    ) {
-        return "❌ Image generation is not configured. Set `HOME_MODE_API_URL` + `HOME_MODE_API_KEY` (or Cloudflare credentials) on the host, then restart OmniBot.";
+    if (error.code === "TIMEOUT") {
+        return "❌ Image generation took too long and was cancelled. Check that your Home Mode API is online and reachable from the bot host.";
     }
-    if (error.code === "IMAGE_AUTH_FAILED" || error.code === "CF_AUTH_FAILED") {
-        return "❌ Image API authentication failed. Check `HOME_MODE_API_KEY` or Cloudflare credentials on the host.";
+    if (error.code === "IMAGE_NOT_CONFIGURED") {
+        return "❌ Image generation is not configured. Set `HOME_MODE_API_URL` and `HOME_MODE_API_KEY` on the host, then restart OmniBot.";
     }
-    if (error.code === "IMAGE_RATE_LIMIT" || error.code === "CF_RATE_LIMIT") {
+    if (error.code === "IMAGE_AUTH_FAILED") {
+        return "❌ Home Mode API key was rejected. Check `HOME_MODE_API_KEY`.";
+    }
+    if (error.code === "IMAGE_RATE_LIMIT") {
         return "❌ The image service is rate-limiting requests. Wait a minute and try again.";
-    }
-    if (error.code === "CF_CAPACITY") {
-        return "❌ Image service is temporarily at capacity. Please try again in a moment.";
-    }
-    if (error.code === "CF_MODEL_ERROR") {
-        return "❌ Image model request was rejected. Check API configuration.";
     }
     if (error.code === "IMAGE_BAD_PROMPT") {
         return "❌ Please provide a description of the image you want.";
     }
-    if (error.code === "IMAGE_EMPTY") {
-        return "❌ The image service returned an empty result.";
+    if (error.code === "IMAGE_TIMEOUT") {
+        return "❌ Image generation timed out. Check your Home Mode API is responding.";
     }
-    if (error.code === "IMAGE_TIMEOUT" || error.code === "CF_TIMEOUT") {
-        return "❌ Image generation timed out. Please try again.";
+    if (error.code === "IMAGE_NETWORK" || error.code === "IMAGE_PROVIDER_ERROR") {
+        return "❌ Could not reach the Home Mode image API. Check `HOME_MODE_API_URL` and that the service is running.";
     }
-    if (error.code === "IMAGE_TOO_LARGE" || error.code === "CF_TOO_LARGE") {
-        return "❌ The image was too large to process.";
-    }
-    if (
-        error.code === "CF_PROVIDER_ERROR" ||
-        error.code === "CF_NETWORK" ||
-        error.code === "IMAGE_PROVIDER_ERROR" ||
-        error.code === "IMAGE_NETWORK"
-    ) {
-        return "❌ Image generation failed. Please try again.";
+    if (error.code === "IMAGE_BAD_RESPONSE") {
+        return "❌ Home Mode API returned an unexpected response (no image data).";
     }
     return "❌ Image generation failed. Please try again.";
-}
-
-function isImageGenerationConfigured() {
-    return isHomeModeConfigured() || isCloudflareConfigured();
 }
 
 module.exports = {
@@ -255,6 +193,5 @@ module.exports = {
     DAILY_LIMIT,
     DEFAULT_WIDTH,
     DEFAULT_HEIGHT,
-    QUEUE_WAIT_MESSAGE,
-    isCloudflareConfigured
+    QUEUE_WAIT_MESSAGE
 };
