@@ -7,19 +7,14 @@ const {
     entersState
 } = require("@discordjs/voice");
 
-const {
-    ChannelType
-} = require("discord.js");
+const { ChannelType } = require("discord.js");
 const { spawn } = require("child_process");
 
 const players = new Map();
 
 function getPlayer(guildId) {
-
     if (!players.has(guildId)) {
-
         const player = createAudioPlayer();
-
         const data = {
             player,
             connection: null,
@@ -30,308 +25,181 @@ function getPlayer(guildId) {
             loop: "off"
         };
 
-        player.on(
-            AudioPlayerStatus.Idle,
-            async () => {
+        player.on(AudioPlayerStatus.Idle, async () => {
+            if (!data.current) return;
 
-                if (!data.current) return;
-
-                // Repeat current song
-                if (data.loop === "song") {
-
-                    await playSong(
-                        data,
-                        data.current.title,
-                        data.current.url
-                    );
-
-                    return;
-                }
-
-                // Repeat queue
-                if (
-                    data.loop === "queue" &&
-                    data.queue.length > 0
-                ) {
-
-                    const finished =
-                        data.current;
-
-                    data.queue.push(finished);
-
-                    const next =
-                        data.queue.shift();
-
-                    await playSong(
-                        data,
-                        next.title,
-                        next.url
-                    );
-
-                    return;
-                }
-
-                // Normal queue
-                if (data.queue.length > 0) {
-
-                    const next =
-                        data.queue.shift();
-
-                    await playSong(
-                        data,
-                        next.title,
-                        next.url
-                    );
-
-                } else {
-
-                    data.current = null;
-                }
+            if (data.loop === "song") {
+                await playSong(data, data.current.title, data.current.url);
+                return;
             }
-        );
 
-        players.set(
-            guildId,
-            data
-        );
+            if (data.loop === "queue" && data.queue.length > 0) {
+                data.queue.push(data.current);
+                const next = data.queue.shift();
+                await playSong(data, next.title, next.url);
+                return;
+            }
+
+            if (data.queue.length > 0) {
+                const next = data.queue.shift();
+                await playSong(data, next.title, next.url);
+            } else {
+                data.current = null;
+            }
+        });
+
+        players.set(guildId, data);
     }
-
     return players.get(guildId);
 }
 
 async function connect(member) {
-
-    const guild =
-        member.guild;
-
-    const voiceChannel =
-        member.voice.channel;
+    const guild = member.guild;
+    const voiceChannel = member.voice.channel;
 
     if (!voiceChannel) {
-        throw new Error(
-            "You must be in a voice channel first."
-        );
+        throw new Error("You must be in a voice channel first.");
     }
 
-    const existing =
-        players.get(guild.id);
-
-    if (
-        existing &&
-        existing.connection
-    ) {
+    const existing = players.get(guild.id);
+    if (existing && existing.connection) {
         return existing;
     }
 
-    const connection =
-        joinVoiceChannel({
-            channelId:
-                voiceChannel.id,
+    const connection = joinVoiceChannel({
+        channelId: voiceChannel.id,
+        guildId: guild.id,
+        adapterCreator: guild.voiceAdapterCreator,
+        selfDeaf: true
+    });
 
-            guildId:
-                guild.id,
+    await entersState(connection, VoiceConnectionStatus.Ready, 15000);
 
-            adapterCreator:
-                guild.voiceAdapterCreator,
+    const data = getPlayer(guild.id);
+    data.connection = connection;
+    connection.subscribe(data.player);
 
-            selfDeaf: true
-        });
+    let leaveTimer = null;
 
-    await entersState(
-        connection,
-        VoiceConnectionStatus.Ready,
-        15000
-    );
+    const checkEmptyChannel = () => {
+        const channel = member.guild.channels.cache.get(voiceChannel.id);
+        if (!channel || channel.type !== ChannelType.GuildVoice) return;
 
-    const data =
-        getPlayer(guild.id);
-
-    data.connection =
-        connection;
-
-    connection.subscribe(
-    data.player
-);
-
-let leaveTimer = null;
-
-const checkEmptyChannel = () => {
-
-    const channel =
-        member.guild.channels.cache.get(
-            voiceChannel.id
-        );
-
-    if (
-        !channel ||
-        channel.type !== ChannelType.GuildVoice
-    ) {
-        return;
-    }
-
-    const humans =
-        channel.members.filter(
-            m => !m.user.bot
-        );
-
-    if (humans.size === 0) {
-
-        if (leaveTimer) {
-            clearTimeout(leaveTimer);
-        }
-
-        leaveTimer = setTimeout(
-            () => {
-
-                const current =
-                    players.get(
-                        guild.id
-                    );
-
-                if (
-                    current &&
-                    current.connection
-                ) {
-
-                    console.log(
-                        `Leaving empty voice channel in ${guild.name}`
-                    );
-
+        const humans = channel.members.filter((m) => !m.user.bot);
+        if (humans.size === 0) {
+            if (leaveTimer) clearTimeout(leaveTimer);
+            leaveTimer = setTimeout(() => {
+                const current = players.get(guild.id);
+                if (current && current.connection) {
+                    console.log(`Leaving empty voice channel in ${guild.name}`);
                     destroy(guild.id);
                 }
-
-            },
-            30000
-        );
-
-    } else {
-
-        if (leaveTimer) {
+            }, 30000);
+        } else if (leaveTimer) {
             clearTimeout(leaveTimer);
             leaveTimer = null;
         }
-    }
-};
+    };
 
-const voiceStateHandler =
-    (oldState, newState) => {
-
+    member.client.on("voiceStateUpdate", (oldState, newState) => {
         if (
             oldState.channelId === voiceChannel.id ||
             newState.channelId === voiceChannel.id
         ) {
             checkEmptyChannel();
         }
-    };
+    });
 
-member.client.on(
-    "voiceStateUpdate",
-    voiceStateHandler
-);
-
-return data;
+    return data;
 }
 
-async function playSong(
-    data,
-    title,
-    url,
-    startSeconds = 0
-) {
+async function playSong(data, title, url, startSeconds = 0) {
     if (data.ffmpeg) {
-
         try {
             data.ffmpeg.kill();
-        } catch {}
+        } catch {
+            /* ignore */
+        }
+        data.ffmpeg = null;
+    }
+
+    // Prefer play-dl stream (SoundCloud / direct). Never use YouTube.
+    try {
+        const play = require("play-dl");
+        if (/youtu\.be|youtube\.com/i.test(String(url))) {
+            throw new Error("YouTube streaming is disabled");
+        }
+        const streamInfo = await play.stream(url, {
+            seek: startSeconds || undefined
+        });
+        const resource = createAudioResource(streamInfo.stream, {
+            inputType: streamInfo.type,
+            inlineVolume: true
+        });
+        if (resource.volume) {
+            resource.volume.setVolume(data.volume ?? 1);
+        }
+        data.current = { title, url };
+        data.player.play(resource);
+        return;
+    } catch (streamErr) {
+        console.warn(
+            "[Music] play-dl stream failed, trying yt-dlp non-YouTube:",
+            streamErr?.message || streamErr
+        );
+    }
+
+    if (/youtu\.be|youtube\.com/i.test(String(url))) {
+        throw new Error("YouTube streaming is disabled");
     }
 
     const args = [
-    "-f",
-    "bestaudio/best",
-    "-o",
-    "-",
-    "--no-playlist",
-    "--quiet",
-    "--no-warnings"
-];
+        "-f",
+        "bestaudio/best",
+        "-o",
+        "-",
+        "--no-playlist",
+        "--quiet",
+        "--no-warnings"
+    ];
+    if (startSeconds > 0) {
+        args.push("--download-sections", `*${startSeconds}-inf`);
+    }
+    args.push(url);
 
-if (startSeconds > 0) {
-    args.push(
-        "--download-sections",
-        `*${startSeconds}-inf`
-    );
-}
+    const ffmpeg = spawn("yt-dlp", args);
+    data.ffmpeg = ffmpeg;
 
-args.push(url);
+    ffmpeg.stderr.on("data", (output) => {
+        const text = output.toString().trim();
+        if (text) console.log("yt-dlp:", text);
+    });
+    ffmpeg.on("error", (error) => {
+        console.error("yt-dlp error:", error);
+    });
 
-const ffmpeg =
-    spawn("yt-dlp", args);
-    data.ffmpeg =
-        ffmpeg;
+    const resource = createAudioResource(ffmpeg.stdout, {
+        inputType: "arbitrary",
+        inlineVolume: true
+    });
+    if (resource.volume) {
+        resource.volume.setVolume(data.volume ?? 1);
+    }
 
-    ffmpeg.stderr.on(
-        "data",
-        output => {
-
-            const text =
-                output
-                    .toString()
-                    .trim();
-
-            if (text) {
-                console.log(
-                    "yt-dlp:",
-                    text
-                );
-            }
-        }
-    );
-
-    ffmpeg.on(
-        "error",
-        error => {
-            console.error(
-                "yt-dlp error:",
-                error
-            );
-        }
-    );
-
-    const resource =
-        createAudioResource(
-            ffmpeg.stdout,
-            {
-                inputType: "arbitrary",
-                inlineVolume: true
-            }
-        );
-
-    resource.volume.setVolume(
-        data.volume ?? 1
-    );
-
-    data.current = {
-        title,
-        url
-    };
-
-    data.player.play(
-        resource
-    );
+    data.current = { title, url };
+    data.player.play(resource);
 }
 
 function destroy(guildId) {
-
-    const data =
-        players.get(guildId);
-
+    const data = players.get(guildId);
     if (!data) return;
 
     if (data.ffmpeg) {
-
         try {
             data.ffmpeg.kill();
-        } catch {}
+        } catch {
+            /* ignore */
+        }
     }
 
     if (data.connection) {
@@ -339,10 +207,7 @@ function destroy(guildId) {
     }
 
     data.player.stop();
-
-    players.delete(
-        guildId
-    );
+    players.delete(guildId);
 }
 
 function getMusicData(guildId) {
