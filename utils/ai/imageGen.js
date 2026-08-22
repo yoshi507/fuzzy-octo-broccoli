@@ -1,5 +1,5 @@
 /**
- * Pollinations Flux image generation — simple, logged, resource-safe.
+ * AI image generation - Cloudflare Workers AI primary, Pollinations fallback.
  * ONE job at a time via generationQueue.
  */
 
@@ -8,8 +8,14 @@ const {
     enqueueGeneration,
     QUEUE_WAIT_MESSAGE
 } = require("./generationQueue.js");
+const {
+    isCloudflareConfigured,
+    generateTextToImage: cfTextToImage,
+    generateImageToImage: cfImageToImage,
+    DEFAULT_IMG2IMG_STRENGTH
+} = require("./cloudflareImage.js");
 
-const MODEL = "flux";
+const MODEL = "cloudflare-sd15 / pollinations-flux";
 const DEFAULT_WIDTH = 512;
 const DEFAULT_HEIGHT = 512;
 const MAX_DIM = 512;
@@ -21,7 +27,7 @@ function logImg(msg, extra) {
     else console.log(`[ImageGen] ${msg}`);
 }
 
-function resolveApiKey() {
+function resolvePollinationsKey() {
     const raw =
         process.env.POLLINATIONS_API_KEY ||
         process.env.POLLINATIONS_KEY ||
@@ -33,25 +39,6 @@ function resolveApiKey() {
 function clampDim(n, fallback) {
     const v = Number(n) || fallback;
     return Math.min(MAX_DIM, Math.max(256, Math.floor(v)));
-}
-
-function buildImageUrl(prompt, opts = {}) {
-    const encoded = encodeURIComponent(String(prompt).trim().slice(0, 400));
-    const width = clampDim(opts.width, DEFAULT_WIDTH);
-    const height = clampDim(opts.height, DEFAULT_HEIGHT);
-    const params = new URLSearchParams({
-        model: MODEL,
-        width: String(width),
-        height: String(height),
-        nologo: "true",
-        enhance: "false"
-    });
-    if (opts.seed != null && Number.isFinite(Number(opts.seed))) {
-        params.set("seed", String(Math.floor(Number(opts.seed))));
-    }
-    const key = resolveApiKey();
-    if (key) params.set("key", key);
-    return `https://gen.pollinations.ai/image/${encoded}?${params.toString()}`;
 }
 
 function looksLikeImage(buf) {
@@ -72,24 +59,30 @@ function looksLikeImage(buf) {
     return false;
 }
 
-async function readBody(res, maxBytes) {
-    const ab = await res.arrayBuffer();
-    if (ab.byteLength > maxBytes) {
-        const err = new Error(
-            `Image response too large (${ab.byteLength} > ${maxBytes})`
-        );
-        err.code = "IMAGE_TOO_LARGE";
-        throw err;
+function buildPollinationsUrl(prompt, opts = {}) {
+    const encoded = encodeURIComponent(String(prompt).trim().slice(0, 400));
+    const width = clampDim(opts.width, DEFAULT_WIDTH);
+    const height = clampDim(opts.height, DEFAULT_HEIGHT);
+    const params = new URLSearchParams({
+        model: "flux",
+        width: String(width),
+        height: String(height),
+        nologo: "true",
+        enhance: "false"
+    });
+    if (opts.seed != null && Number.isFinite(Number(opts.seed))) {
+        params.set("seed", String(Math.floor(Number(opts.seed))));
     }
-    return Buffer.from(ab);
+    const key = resolvePollinationsKey();
+    if (key) params.set("key", key);
+    return `https://gen.pollinations.ai/image/${encoded}?${params.toString()}`;
 }
 
-async function fetchFluxImage(prompt, opts = {}) {
-    const key = resolveApiKey();
+async function fetchPollinationsImage(prompt, opts = {}) {
+    const key = resolvePollinationsKey();
     if (!key) {
         const err = new Error("POLLINATIONS_API_KEY is not configured");
         err.code = "IMAGE_NOT_CONFIGURED";
-        logImg("FAIL: missing POLLINATIONS_API_KEY");
         throw err;
     }
 
@@ -100,14 +93,9 @@ async function fetchFluxImage(prompt, opts = {}) {
         throw err;
     }
 
-    const url = buildImageUrl(cleaned, opts);
+    const url = buildPollinationsUrl(cleaned, opts);
     const safeUrl = url.replace(/([?&]key=)[^&]+/i, "$1***");
-    logImg(`request start ${safeUrl}`);
-
-    const headers = {
-        Authorization: `Bearer ${key}`,
-        Accept: "image/*,application/json"
-    };
+    logImg(`pollinations request ${safeUrl}`);
 
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
@@ -116,19 +104,20 @@ async function fetchFluxImage(prompt, opts = {}) {
     try {
         res = await fetch(url, {
             method: "GET",
-            headers,
+            headers: {
+                Authorization: `Bearer ${key}`,
+                Accept: "image/*,application/json"
+            },
             redirect: "follow",
             signal: controller.signal
         });
     } catch (e) {
         clearTimeout(timer);
         if (e?.name === "AbortError") {
-            logImg(`FAIL: timeout after ${FETCH_TIMEOUT_MS}ms`);
             const err = new Error("Image request timed out");
             err.code = "IMAGE_TIMEOUT";
             throw err;
         }
-        logImg(`FAIL: network error: ${e?.message || e}`);
         const err = new Error(`Image provider request failed: ${e?.message || e}`);
         err.code = "IMAGE_PROVIDER_ERROR";
         err.cause = e;
@@ -138,8 +127,7 @@ async function fetchFluxImage(prompt, opts = {}) {
     }
 
     const status = res.status;
-    const contentType = (res.headers.get("content-type") || "").split(";")[0];
-    logImg(`response status=${status} content-type=${contentType || "unknown"}`);
+    logImg(`pollinations status=${status}`);
 
     if (!res.ok) {
         let bodyText = "";
@@ -152,7 +140,6 @@ async function fetchFluxImage(prompt, opts = {}) {
             `[ImageGen] Pollinations HTTP ${status}:`,
             String(bodyText).slice(0, 500)
         );
-
         if (status === 401 || status === 403) {
             const err = new Error(`Pollinations auth failed (HTTP ${status})`);
             err.code = "IMAGE_AUTH_FAILED";
@@ -166,10 +153,7 @@ async function fetchFluxImage(prompt, opts = {}) {
             throw err;
         }
         if (status === 402) {
-            logImg("FAIL: Pollinations insufficient balance (HTTP 402)");
-            const err = new Error(
-                `Pollinations insufficient balance (HTTP 402): ${String(bodyText).slice(0, 200)}`
-            );
+            const err = new Error(`Pollinations insufficient balance (HTTP 402)`);
             err.code = "IMAGE_PAYMENT_REQUIRED";
             err.status = 402;
             throw err;
@@ -182,32 +166,97 @@ async function fetchFluxImage(prompt, opts = {}) {
         throw err;
     }
 
-    const buffer = await readBody(res, MAX_IMAGE_BYTES);
-    logImg(`downloaded ${buffer.length} bytes`);
-
-    if (!buffer.length) {
-        const err = new Error("Empty image response");
-        err.code = "IMAGE_EMPTY";
+    const ab = await res.arrayBuffer();
+    if (ab.byteLength > MAX_IMAGE_BYTES) {
+        const err = new Error("Image response too large");
+        err.code = "IMAGE_TOO_LARGE";
         throw err;
     }
-
-    if (!looksLikeImage(buffer)) {
-        const preview = buffer.toString("utf8", 0, 300);
-        console.error(`[ImageGen] response is not an image. preview=`, preview);
-        const err = new Error(
-            `Pollinations returned non-image data: ${preview.slice(0, 120)}`
-        );
+    const buffer = Buffer.from(ab);
+    if (!buffer.length || !looksLikeImage(buffer)) {
+        const err = new Error("Pollinations returned non-image data");
         err.code = "IMAGE_PROVIDER_ERROR";
         throw err;
     }
 
-    let ct = contentType || "image/jpeg";
+    let ct = "image/jpeg";
     if (buffer[0] === 0x89 && buffer[1] === 0x50) ct = "image/png";
     else if (buffer[0] === 0xff && buffer[1] === 0xd8) ct = "image/jpeg";
     else if (buffer[0] === 0x52 && buffer[1] === 0x49) ct = "image/webp";
 
-    logImg(`OK image ${ct} ${buffer.length} bytes`);
-    return { buffer, contentType: ct };
+    logImg(`pollinations OK ${ct} ${buffer.length} bytes`);
+    return { buffer, contentType: ct, provider: "pollinations" };
+}
+
+async function fetchFluxImage(prompt, opts = {}) {
+    const cleaned = String(prompt || "").trim();
+    if (!cleaned) {
+        const err = new Error("Prompt is required");
+        err.code = "IMAGE_BAD_PROMPT";
+        throw err;
+    }
+
+    const width = clampDim(opts.width, DEFAULT_WIDTH);
+    const height = clampDim(opts.height, DEFAULT_HEIGHT);
+
+    if (isCloudflareConfigured()) {
+        try {
+            logImg("trying Cloudflare Workers AI (text-to-image)");
+            const result = await cfTextToImage(cleaned, {
+                width,
+                height,
+                seed: opts.seed,
+                steps: opts.steps,
+                guidance: opts.guidance,
+                negativePrompt: opts.negativePrompt
+            });
+            return result;
+        } catch (err) {
+            console.error(
+                "[ImageGen] Cloudflare failed, will try Pollinations fallback:",
+                err?.code || err?.message || err
+            );
+        }
+    } else {
+        logImg("Cloudflare not configured - using Pollinations if available");
+    }
+
+    return fetchPollinationsImage(cleaned, { width, height, seed: opts.seed });
+}
+
+async function fetchImg2Img(prompt, referenceBuffer, opts = {}) {
+    const cleaned = String(prompt || "").trim();
+    if (!cleaned) {
+        const err = new Error("Prompt is required");
+        err.code = "IMAGE_BAD_PROMPT";
+        throw err;
+    }
+
+    if (isCloudflareConfigured() && referenceBuffer?.length) {
+        try {
+            logImg("trying Cloudflare img2img");
+            return await cfImageToImage(cleaned, referenceBuffer, {
+                width: clampDim(opts.width, DEFAULT_WIDTH),
+                height: clampDim(opts.height, DEFAULT_HEIGHT),
+                strength:
+                    opts.strength != null
+                        ? opts.strength
+                        : DEFAULT_IMG2IMG_STRENGTH,
+                seed: opts.seed,
+                steps: opts.steps,
+                guidance: opts.guidance,
+                negativePrompt: opts.negativePrompt
+            });
+        } catch (err) {
+            console.error(
+                "[ImageGen] Cloudflare img2img failed:",
+                err?.code || err?.message || err
+            );
+        }
+    }
+
+    logImg("img2img fallback -> text-to-image (no reference)");
+    return fetchFluxImage(cleaned, opts);
 }
 
 async function generateGuildImage(guildId, prompt, opts = {}) {
@@ -222,6 +271,14 @@ async function generateGuildImage(guildId, prompt, opts = {}) {
         const err = new Error("AI daily limit reached");
         err.code = "AI_DAILY_LIMIT";
         err.guildId = guildId;
+        throw err;
+    }
+
+    if (!isCloudflareConfigured() && !resolvePollinationsKey()) {
+        const err = new Error(
+            "No image provider configured (set CLOUDFLARE_ACCOUNT_ID + CLOUDFLARE_API_TOKEN or POLLINATIONS_API_KEY)"
+        );
+        err.code = "IMAGE_NOT_CONFIGURED";
         throw err;
     }
 
@@ -242,7 +299,9 @@ async function generateGuildImage(guildId, prompt, opts = {}) {
             });
 
             if (guildId) useAI(guildId);
-            logImg(`queued job done guild=${guildId || "n/a"}`);
+            logImg(
+                `queued job done guild=${guildId || "n/a"} provider=${result.provider || "?"}`
+            );
             return result;
         },
         "image",
@@ -260,17 +319,17 @@ function formatImageUserError(error) {
             return "❌ This server has reached its daily AI limit. Try again tomorrow.";
         }
     }
-    if (error.code === "IMAGE_NOT_CONFIGURED") {
-        return "❌ Image generation is not configured. Set `POLLINATIONS_API_KEY` on the host.";
+    if (error.code === "IMAGE_NOT_CONFIGURED" || error.code === "CF_NOT_CONFIGURED") {
+        return "❌ Image generation is not configured. Set `CLOUDFLARE_ACCOUNT_ID` + `CLOUDFLARE_API_TOKEN` (or `POLLINATIONS_API_KEY` as fallback).";
     }
-    if (error.code === "IMAGE_AUTH_FAILED") {
-        return "❌ Image API authentication failed. Check `POLLINATIONS_API_KEY`.";
+    if (error.code === "IMAGE_AUTH_FAILED" || error.code === "CF_AUTH_FAILED") {
+        return "❌ Image API authentication failed. Check Cloudflare / Pollinations credentials on the host.";
     }
-    if (error.code === "IMAGE_RATE_LIMIT") {
+    if (error.code === "IMAGE_RATE_LIMIT" || error.code === "CF_RATE_LIMIT") {
         return "❌ The image service is rate-limited. Try again in a moment.";
     }
     if (error.code === "IMAGE_PAYMENT_REQUIRED") {
-        return "❌ Image generation is unavailable: the Pollinations account has **no remaining balance (pollen)**. An admin needs to top up at https://enter.pollinations.ai — this is not an OmniBot bug.";
+        return "❌ Image generation is unavailable: the Pollinations account has **no remaining balance (pollen)**. Prefer Cloudflare Workers AI (`CLOUDFLARE_ACCOUNT_ID` + `CLOUDFLARE_API_TOKEN`), or top up Pollinations.";
     }
     if (error.code === "IMAGE_BAD_PROMPT") {
         return "❌ Please provide a description of the image you want.";
@@ -278,24 +337,29 @@ function formatImageUserError(error) {
     if (error.code === "IMAGE_EMPTY") {
         return "❌ The image service returned an empty result.";
     }
-    if (error.code === "IMAGE_TIMEOUT") {
+    if (error.code === "IMAGE_TIMEOUT" || error.code === "CF_TIMEOUT") {
         return "❌ Image generation timed out. Please try again.";
     }
-    if (error.code === "IMAGE_TOO_LARGE") {
+    if (error.code === "IMAGE_TOO_LARGE" || error.code === "CF_TOO_LARGE") {
         return "❌ The image was too large to process.";
     }
     return "❌ Image generation failed. Please try again.";
 }
 
+const resolveApiKey = resolvePollinationsKey;
+
 module.exports = {
     MODEL,
     generateGuildImage,
     fetchFluxImage,
+    fetchImg2Img,
+    fetchPollinationsImage,
     formatImageUserError,
     resolveApiKey,
     getRemaining,
     DAILY_LIMIT,
     DEFAULT_WIDTH,
     DEFAULT_HEIGHT,
-    QUEUE_WAIT_MESSAGE
+    QUEUE_WAIT_MESSAGE,
+    isCloudflareConfigured
 };
