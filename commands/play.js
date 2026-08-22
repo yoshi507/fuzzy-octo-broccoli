@@ -62,6 +62,12 @@ module.exports = {
             } else if (err?.code === "TIMEOUT") {
                 msg =
                     "Search timed out. Try a direct SoundCloud link or a shorter query.";
+            } else if (
+                err?.code === "MUSIC_STREAM_FAILED" ||
+                err?.code === "MUSIC_NOT_PLAYING"
+            ) {
+                msg =
+                    "Found the track but could not play audio. Ensure the host has network access and yt-dlp/ffmpeg if needed.";
             }
             return interaction.editReply(`❌ ${msg}`.replace(/^❌ ❌/, "❌"));
         }
