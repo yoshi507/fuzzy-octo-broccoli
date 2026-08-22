@@ -23,25 +23,19 @@ a{color:var(--accent);text-decoration:none}button,input,select,textarea{font:inh
 .main{padding:1.5rem;max-width:1100px}
 .topbar{display:flex;justify-content:space-between;align-items:center;gap:1rem;margin-bottom:1.25rem;flex-wrap:wrap}
 .card{background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);padding:1.25rem;margin-bottom:1rem;box-shadow:var(--shadow)}
-.card h2{margin:0 0 .35rem;font-size:1.15rem}.card p.help{margin:0 0 1rem;color:var(--muted);font-size:.9rem}
-.grid2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1rem}
-.stat{background:var(--panel2);border:1px solid var(--border);border-radius:10px;padding:1rem}
-.stat .status{font-size:.8rem;color:var(--muted);margin-bottom:.35rem}
-.pill{display:inline-block;padding:.2rem .55rem;border-radius:999px;font-size:.8rem;font-weight:600;background:var(--panel2);border:1px solid var(--border)}
-.pill.ok{background:rgba(59,165,93,.15);color:var(--ok);border-color:rgba(59,165,93,.35)}
-.pill.err{background:rgba(237,66,69,.15);color:var(--err);border-color:rgba(237,66,69,.35)}
-.field{margin-bottom:.85rem}.field label{display:block;font-size:.85rem;color:var(--muted);margin-bottom:.35rem}
-.field input,.field select,.field textarea{width:100%;background:var(--bg);border:1px solid var(--border);border-radius:8px;color:var(--text);padding:.6rem .75rem}
-.field textarea{min-height:100px;resize:vertical}
-.switch{display:flex;align-items:center;justify-content:space-between;gap:1rem;padding:.55rem 0;border-bottom:1px solid var(--border)}
-.switch:last-of-type{border-bottom:0}
-.row{display:flex;flex-wrap:wrap;gap:.6rem;align-items:center}
-.center{min-height:100vh;display:grid;place-items:center;padding:1.5rem}
-.login-card{width:min(420px,100%)}
-.guild-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:.75rem;margin-top:1rem}
-.guild{display:flex;gap:.75rem;align-items:center;padding:.85rem;border:1px solid var(--border);border-radius:10px;background:var(--panel2);cursor:pointer}
-.guild:hover{border-color:var(--accent)}
-.guild img,.avatar-prev{width:40px;height:40px;border-radius:50%;object-fit:cover;background:#000;flex-shrink:0}
+.card h2{margin:0 0 .35rem;font-size:1.15rem}.card p.help{margin:0 0 1rem;color:var(--muted);font-size:.9rem;line-height:1.45}
+.field{margin-bottom:.85rem}.field label{display:block;font-size:.8rem;color:var(--muted);margin-bottom:.35rem}
+.field input,.field select,.field textarea{width:100%;background:var(--panel2);border:1px solid var(--border);border-radius:8px;color:var(--text);padding:.65rem .75rem}
+.field textarea{min-height:96px;resize:vertical}
+.switch{display:flex;align-items:center;justify-content:space-between;gap:1rem;padding:.55rem 0;border-bottom:1px solid rgba(42,49,66,.55)}
+.switch:last-child{border-bottom:0}.row{display:flex;gap:.65rem;flex-wrap:wrap;align-items:center}
+.pill{display:inline-flex;align-items:center;gap:.35rem;padding:.25rem .55rem;border-radius:999px;background:var(--panel2);border:1px solid var(--border);font-size:.8rem}
+.pill.ok{border-color:rgba(59,165,93,.45);color:var(--ok)}.pill.err{border-color:rgba(237,66,69,.45);color:var(--err)}
+.center{min-height:100vh;display:grid;place-items:center;padding:1.5rem}.login-card{width:min(420px,100%);text-align:left}
+.guild{display:flex;gap:.85rem;align-items:center;padding:.85rem;border:1px solid var(--border);border-radius:10px;margin-bottom:.65rem;cursor:pointer;background:var(--panel)}
+.guild:hover{border-color:var(--accent)}.guild img{width:42px;height:42px;border-radius:50%}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:1rem}.stat{background:var(--panel2);border:1px solid var(--border);border-radius:10px;padding:.85rem}.stat strong{display:block;font-size:1.25rem;margin-top:.25rem}
+.site-footer{margin-top:1.5rem;padding-top:1rem;border-top:1px solid var(--border);text-align:center;color:var(--muted);font-size:.85rem}
 .status{color:var(--muted);font-size:.85rem}
 .toast{position:fixed;right:1rem;bottom:1rem;background:var(--panel2);border:1px solid var(--border);padding:.75rem 1rem;border-radius:10px;z-index:50;max-width:min(360px,92vw);box-shadow:var(--shadow)}
 .toast.ok{border-color:rgba(59,165,93,.45)}.toast.err{border-color:rgba(237,66,69,.45)}
@@ -54,8 +48,9 @@ a{color:var(--accent);text-decoration:none}button,input,select,textarea{font:inh
 <body>
 <div id="app"><div class="center"><div class="card login-card"><p class="help">Loading OmniBot…</p></div></div></div>
 <div id="toast" class="toast hidden"></div>
-<script src="/dashboard.js?v=20260821c"></script>
-<script src="/dashboard-app.js?v=20260821c"></script>
+<script src="/dashboard.js?v=20260822a"></script>
+<script src="/dashboard-app.js?v=20260822a"></script>
+<script src="/dash-advisor.js?v=20260822a"></script>
 <script src="/advertise-page.js?v=20260821c"></script>
 <script src="/nav-fix.js?v=20260821c"></script>
 <script src="/idle-opt.js?v=1"></script>
