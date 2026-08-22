@@ -28,7 +28,11 @@ function resolveGroqApiKey() {
         process.env.GROQ_KEY ||
         process.env.GROQ_TOKEN ||
         "";
-    const key = String(raw).trim().replace(/^["']|["']$/g, "");
+    // Strip quotes, whitespace, and accidental "Bearer " prefix from host env UIs
+    let key = String(raw).trim().replace(/^["']|["']$/g, "");
+    if (/^bearer\s+/i.test(key)) key = key.replace(/^bearer\s+/i, "").trim();
+    // Remove zero-width / BOM characters that sometimes get pasted into panels
+    key = key.replace(/[\u200B-\u200D\uFEFF]/g, "").trim();
     return key || null;
 }
 
@@ -270,6 +274,13 @@ async function askAI(messages, options = {}) {
             );
 
             if (isAuthError(apiError)) {
+                const k = resolveGroqApiKey();
+                console.error(
+                    "[AI] Groq rejected the API key (HTTP 401/403). " +
+                        `Key present=${Boolean(k)} len=${k ? k.length : 0} ` +
+                        `prefix=${k ? k.slice(0, 4) + "…" : "n/a"}. ` +
+                        "Update GROQ_API_KEY on the host with a valid key from console.groq.com, then fully restart."
+                );
                 const error = new Error("Groq authentication failed");
                 error.code = "AI_AUTH_FAILED";
                 error.status = info.status;
