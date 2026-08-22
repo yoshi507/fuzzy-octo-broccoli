@@ -10,6 +10,14 @@ try {
             ` (accountId=${cf.hasAccountId ? "set" : "missing"}, token=${cf.hasToken ? "set" : "missing"})`
     );
     console.log(`[Startup] groq=${groqKey ? "ready" : "not-configured"}`);
+    try {
+        const { getHomeModeStatus } = require("./utils/ai/homeModeImage.js");
+        const hm = getHomeModeStatus();
+        console.log(
+            `[Startup] image homemode=${hm.configured ? "ready" : "not-configured"}` +
+                ` (url=${hm.hasUrl ? "set" : "missing"}, key=${hm.hasKey ? "set" : "missing"})`
+        );
+    } catch (_) {}
 } catch (e) {
     console.log("[Startup] image provider status unavailable:", e?.message || e);
 }
