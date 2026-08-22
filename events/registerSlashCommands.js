@@ -5,6 +5,9 @@ module.exports = {
     once: true,
     async execute(client) {
         try {
+            console.log(
+                `✅ OmniBot online as ${client.user?.tag || client.user?.id} · guilds=${client.guilds?.cache?.size ?? 0}`
+            );
             await registerSlashCommands(client);
         } catch (err) {
             console.error(
