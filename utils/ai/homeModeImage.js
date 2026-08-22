@@ -1,25 +1,17 @@
 /**
- * Image generation via a self-hosted / Home Mode HTTP API.
+ * Image generation via Home Mode / PixelForge HTTP API.
  *
- * Env (never log secrets):
- *   HOME_MODE_API_URL   — base URL, e.g. https://api.example.com
- *   HOME_MODE_API_KEY   — bearer / x-api-key
- *   HOME_MODE_API_PATH  — optional path (default /v1/images/generations)
- *   HOME_MODE_API_MODEL — optional model name sent in JSON body
+ * PixelForge (user site):
+ *   HOME_MODE_API_URL=https://free-ai-image-generator-black.vercel.app
+ *   HOME_MODE_API_PATH=/api/v1/generate
+ *   HOME_MODE_API_KEY=optional  (Bearer)
  *
- * Expected request (OpenAI-compatible images API):
- *   POST {HOME_MODE_API_URL}{HOME_MODE_API_PATH}
- *   Authorization: Bearer {HOME_MODE_API_KEY}
- *   { "prompt": "...", "n": 1, "size": "1024x1024", "model": "..." }
- *
- * Accepted responses:
- *   - { data: [ { url } ] } or { data: [ { b64_json } ] }
- *   - { url } / { image_url } / { image }
- *   - raw image bytes (image/png|jpeg|webp)
+ * Request:  POST {url}{path}  JSON { prompt, style?, width?, height? }
+ * Response: { success, image_url, ... } or OpenAI-style { data:[{url|b64_json}] }
  */
 
-const DEFAULT_PATH = "/v1/images/generations";
-const FETCH_TIMEOUT_MS = 45_000;
+const DEFAULT_PATH = "/api/v1/generate";
+const FETCH_TIMEOUT_MS = 90_000;
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 
 function pickEnv(...names) {
@@ -33,18 +25,25 @@ function pickEnv(...names) {
 }
 
 function resolveBaseUrl() {
-    return pickEnv(
+    let base = pickEnv(
         "HOME_MODE_API_URL",
         "HOMEMODE_API_URL",
-        "IMAGE_API_URL"
+        "IMAGE_API_URL",
+        "PIXELFORGE_URL"
     );
+    if (!base) return null;
+    base = base.replace(/\/+$/, "");
+    base = base.replace(/\/api\/v1\/generate$/i, "");
+    base = base.replace(/\/v1\/images\/generations$/i, "");
+    return base;
 }
 
 function resolveApiKey() {
     return pickEnv(
         "HOME_MODE_API_KEY",
         "HOMEMODE_API_KEY",
-        "IMAGE_API_KEY"
+        "IMAGE_API_KEY",
+        "PIXELFORGE_API_KEY"
     );
 }
 
@@ -58,14 +57,15 @@ function resolveModel() {
 }
 
 function isHomeModeConfigured() {
-    return Boolean(resolveBaseUrl() && resolveApiKey());
+    // PixelForge allows optional API key — URL alone is enough
+    return Boolean(resolveBaseUrl());
 }
 
 function getHomeModeStatus() {
     const url = resolveBaseUrl();
     const key = resolveApiKey();
     return {
-        configured: Boolean(url && key),
+        configured: Boolean(url),
         hasUrl: Boolean(url),
         hasKey: Boolean(key),
         path: resolvePath(),
@@ -98,7 +98,11 @@ async function downloadImageUrl(url) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
     try {
-        const res = await fetch(url, { signal: controller.signal });
+        const res = await fetch(url, {
+            signal: controller.signal,
+            headers: { Accept: "image/*,*/*" },
+            redirect: "follow"
+        });
         if (!res.ok) {
             const err = new Error(`Image download failed HTTP ${res.status}`);
             err.code = "IMAGE_DOWNLOAD_FAILED";
@@ -126,10 +130,9 @@ async function downloadImageUrl(url) {
 
 async function generateHomeModeImage(prompt, opts = {}) {
     const base = resolveBaseUrl();
-    const key = resolveApiKey();
-    if (!base || !key) {
+    if (!base) {
         const err = new Error(
-            "HOME_MODE_API_URL / HOME_MODE_API_KEY not configured"
+            "HOME_MODE_API_URL not configured (e.g. https://free-ai-image-generator-black.vercel.app)"
         );
         err.code = "IMAGE_NOT_CONFIGURED";
         throw err;
@@ -142,36 +145,40 @@ async function generateHomeModeImage(prompt, opts = {}) {
         throw err;
     }
 
-    const width = Number(opts.width) || 1024;
-    const height = Number(opts.height) || 1024;
-    const size = `${width}x${height}`;
+    const width = Math.min(1024, Math.max(256, Number(opts.width) || 512));
+    const height = Math.min(1024, Math.max(256, Number(opts.height) || 512));
     const path = resolvePath();
-    const url = base.replace(/\/+$/, "") + path;
+    const endpoint = base.replace(/\/+$/, "") + path;
+    const key = resolveApiKey();
     const model = resolveModel();
 
     const body = {
         prompt: cleaned,
-        n: 1,
-        size
+        width,
+        height
     };
+    if (opts.style) body.style = String(opts.style);
     if (model) body.model = model;
-    if (opts.negativePrompt) body.negative_prompt = String(opts.negativePrompt);
 
-    logHm(`POST ${path} size=${size}${model ? ` model=${model}` : ""}`);
+    logHm(`POST ${endpoint} size=${width}x${height}${key ? " auth=yes" : " auth=no"}`);
+
+    const headers = {
+        "Content-Type": "application/json",
+        Accept: "application/json,image/*"
+    };
+    if (key) {
+        headers.Authorization = `Bearer ${key}`;
+        headers["X-API-Key"] = key;
+    }
 
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
 
     let res;
     try {
-        res = await fetch(url, {
+        res = await fetch(endpoint, {
             method: "POST",
-            headers: {
-                Authorization: `Bearer ${key}`,
-                "X-API-Key": key,
-                "Content-Type": "application/json",
-                Accept: "application/json,image/*"
-            },
+            headers,
             body: JSON.stringify(body),
             signal: controller.signal
         });
@@ -179,7 +186,7 @@ async function generateHomeModeImage(prompt, opts = {}) {
         clearTimeout(timer);
         if (e?.name === "AbortError") {
             const err = new Error(
-                "Home Mode image request timed out (45s). Check HOME_MODE_API_URL is reachable from the host."
+                "Home Mode image request timed out. Check HOME_MODE_API_URL is reachable."
             );
             err.code = "IMAGE_TIMEOUT";
             throw err;
@@ -244,11 +251,19 @@ async function generateHomeModeImage(prompt, opts = {}) {
         throw err;
     }
 
+    const imageUrl =
+        json?.image_url ||
+        json?.data?.[0]?.url ||
+        json?.url ||
+        json?.image ||
+        null;
+
     const b64 =
         json?.data?.[0]?.b64_json ||
         json?.b64_json ||
         json?.image_b64 ||
         null;
+
     if (b64 && typeof b64 === "string") {
         const buffer = Buffer.from(
             b64.replace(/^data:image\/\w+;base64,/, ""),
@@ -263,13 +278,8 @@ async function generateHomeModeImage(prompt, opts = {}) {
         return { buffer, contentType: "image/png", provider: "homemode" };
     }
 
-    const imageUrl =
-        json?.data?.[0]?.url ||
-        json?.url ||
-        json?.image_url ||
-        json?.image ||
-        null;
     if (imageUrl && typeof imageUrl === "string") {
+        logHm("downloading image_url…");
         const dl = await downloadImageUrl(imageUrl);
         logHm(`OK url-download ${dl.buffer.length} bytes`);
         return { ...dl, provider: "homemode" };
