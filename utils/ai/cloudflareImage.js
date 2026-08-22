@@ -3,8 +3,8 @@
  * Model: @cf/runwayml/stable-diffusion-v1-5-img2img
  *
  * Credentials (never log values):
- *   CLOUDFLARE_ACCOUNT_ID
- *   CLOUDFLARE_API_TOKEN
+ *   CLOUDFLARE_ACCOUNT_ID (or CF_ACCOUNT_ID)
+ *   CLOUDFLARE_API_TOKEN (or CF_API_TOKEN / CLOUDFLARE_TOKEN)
  */
 
 const MODEL = "@cf/runwayml/stable-diffusion-v1-5-img2img";
@@ -23,18 +23,51 @@ function logCf(msg, extra) {
     else console.log(`[CloudflareAI] ${msg}`);
 }
 
+function pickEnv(...names) {
+    for (const name of names) {
+        const raw = process.env[name];
+        if (raw == null) continue;
+        const v = String(raw).trim().replace(/^["']|["']$/g, "");
+        if (v) return v;
+    }
+    return null;
+}
+
 function resolveAccountId() {
-    const raw = process.env.CLOUDFLARE_ACCOUNT_ID || "";
-    return String(raw).trim().replace(/^["']|["']$/g, "") || null;
+    return pickEnv(
+        "CLOUDFLARE_ACCOUNT_ID",
+        "CF_ACCOUNT_ID",
+        "CF_ACCOUNT",
+        "CLOUDFLARE_ACCOUNT"
+    );
 }
 
 function resolveApiToken() {
-    const raw = process.env.CLOUDFLARE_API_TOKEN || "";
-    return String(raw).trim().replace(/^["']|["']$/g, "") || null;
+    return pickEnv(
+        "CLOUDFLARE_API_TOKEN",
+        "CF_API_TOKEN",
+        "CLOUDFLARE_TOKEN",
+        "CF_TOKEN",
+        "CLOUDFLARE_API_KEY",
+        "CF_API_KEY"
+    );
 }
 
 function isCloudflareConfigured() {
     return Boolean(resolveAccountId() && resolveApiToken());
+}
+
+/** Safe status for logs - never prints secrets. */
+function getCloudflareStatus() {
+    const account = resolveAccountId();
+    const token = resolveApiToken();
+    return {
+        configured: Boolean(account && token),
+        hasAccountId: Boolean(account),
+        hasToken: Boolean(token),
+        accountIdLen: account ? account.length : 0,
+        tokenLen: token ? token.length : 0
+    };
 }
 
 function clampDim(n, fallback) {
@@ -271,6 +304,7 @@ module.exports = {
     DEFAULT_HEIGHT,
     DEFAULT_IMG2IMG_STRENGTH,
     isCloudflareConfigured,
+    getCloudflareStatus,
     generateTextToImage,
     generateImageToImage,
     resolveAccountId
