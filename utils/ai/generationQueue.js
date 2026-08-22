@@ -1,12 +1,18 @@
 /**
  * Global AI media generation queue.
- * Only ONE image/video job runs at a time to protect low-RAM hosts (Wispbyte).
+ * Only ONE image job runs at a time.
+ * Every job has a hard timeout so Discord never spins forever.
  */
+
+const { withTimeout } = require("../withTimeout.js");
 
 const QUEUE_WAIT_MESSAGE =
     "⏳ OmniBot is currently generating something. Your request has been queued.";
 
-/** @type {{ job: Function, resolve: Function, reject: Function, label: string }[]} */
+/** Default max time for one generation job (ms) */
+const DEFAULT_JOB_TIMEOUT_MS = 60_000;
+
+/** @type {{ job: Function, resolve: Function, reject: Function, label: string, timeoutMs: number }[]} */
 const queue = [];
 let active = false;
 let activeLabel = null;
@@ -20,10 +26,9 @@ function isBusy() {
 }
 
 /**
- * Enqueue an async job. Resolves/rejects with the job result.
  * @param {() => Promise<any>} jobFn
  * @param {string} [label]
- * @param {{ onQueued?: () => void|Promise<void> }} [opts]
+ * @param {{ onQueued?: () => void|Promise<void>, timeoutMs?: number }} [opts]
  */
 function enqueueGeneration(jobFn, label = "generation", opts = {}) {
     return new Promise((resolve, reject) => {
@@ -31,7 +36,8 @@ function enqueueGeneration(jobFn, label = "generation", opts = {}) {
             job: jobFn,
             resolve,
             reject,
-            label: String(label || "generation")
+            label: String(label || "generation"),
+            timeoutMs: Number(opts.timeoutMs) || DEFAULT_JOB_TIMEOUT_MS
         };
         queue.push(entry);
 
@@ -52,17 +58,28 @@ async function pump() {
 
     active = true;
     activeLabel = next.label;
+    console.log(
+        `[GenQueue] start label=${next.label} timeoutMs=${next.timeoutMs} remaining=${queue.length}`
+    );
     try {
-        const result = await next.job();
+        const result = await withTimeout(
+            Promise.resolve().then(() => next.job()),
+            next.timeoutMs,
+            next.label
+        );
         next.resolve(result);
+        console.log(`[GenQueue] done label=${next.label}`);
     } catch (err) {
+        console.error(
+            `[GenQueue] fail label=${next.label}:`,
+            err?.code || "",
+            err?.message || err
+        );
         next.reject(err);
     } finally {
         active = false;
         activeLabel = null;
-        setImmediate(() => {
-            pump();
-        });
+        setImmediate(() => pump());
     }
 }
 
@@ -70,5 +87,6 @@ module.exports = {
     enqueueGeneration,
     getQueueLength,
     isBusy,
-    QUEUE_WAIT_MESSAGE
+    QUEUE_WAIT_MESSAGE,
+    DEFAULT_JOB_TIMEOUT_MS
 };
