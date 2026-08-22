@@ -95,9 +95,12 @@ function attachClientDiagnostics(client) {
         console.warn(`[Discord] shardReconnecting#${id}`)
     );
 
+    let readyLogged = false;
     const onReady = () => {
+        if (readyLogged) return;
+        readyLogged = true;
         console.log(
-            `✅ Discord ready as ${client.user?.tag || client.user?.id} · guilds=${client.guilds?.cache?.size ?? 0}`
+            `✅ OmniBot online as ${client.user?.tag || client.user?.id} · guilds=${client.guilds?.cache?.size ?? 0}`
         );
         try {
             const { registerSlashCommands } = require("./utils/registerSlashCommands.js");
