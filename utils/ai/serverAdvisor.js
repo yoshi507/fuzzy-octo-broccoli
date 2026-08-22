@@ -19,7 +19,11 @@ const SAFE_SETTING_KEYS = new Set([
     "logging.enabled",
     "moderation.automodEnabled",
     "tickets.enabled",
-    "appeals.enabled"
+    "appeals.enabled",
+    "giveaways.enabled",
+    "reactionRoles.enabled",
+    "economy.enabled",
+    "antiNuke.enabled"
 ]);
 
 function buildGuildSnapshot(guild, settings) {
@@ -140,6 +144,7 @@ Rules for recommendations.action (only when safe and useful):
 - settings_patch: { "type":"settings_patch", "patch": { "<setting.id>": value } }
   Allowed setting keys only: ${[...SAFE_SETTING_KEYS].join(", ")}
 - create_text_channel: { "type":"create_text_channel", "name":"channel-name", "topic":"optional topic" }
+- create_category: { "type":"create_category", "name":"Category Name" }
 - create_role: { "type":"create_role", "name":"Role Name", "hoist": false, "mentionable": false }
 - Or action: null for advice-only items.
 
@@ -228,6 +233,11 @@ function sanitizeAction(action) {
             mentionable: Boolean(action.mentionable)
         };
     }
+    if (type === "create_category") {
+        const name = String(action.name || "").trim().slice(0, 40);
+        if (!name) return null;
+        return { type: "create_category", name };
+    }
     return null;
 }
 
@@ -282,6 +292,42 @@ async function executeActions(guild, actions, user) {
                     channelId: ch.id,
                     name: ch.name
                 });
+            } else if (action.type === "create_category") {
+                const me = guild.members.me;
+                if (me && !me.permissions.has(PermissionFlagsBits.ManageChannels)) {
+                    results.push({
+                        ok: false,
+                        type: action.type,
+                        error: "Bot lacks Manage Channels permission"
+                    });
+                    continue;
+                }
+                const existing = guild.channels.cache.find(
+                    (c) =>
+                        c.type === ChannelType.GuildCategory &&
+                        c.name.toLowerCase() === action.name.toLowerCase()
+                );
+                if (existing) {
+                    results.push({
+                        ok: true,
+                        type: action.type,
+                        skipped: true,
+                        channelId: existing.id,
+                        name: existing.name
+                    });
+                    continue;
+                }
+                const cat = await guild.channels.create({
+                    name: action.name,
+                    type: ChannelType.GuildCategory,
+                    reason: `OmniBot Growth Advisor (${user?.username || user?.id || "dashboard"})`
+                });
+                results.push({
+                    ok: true,
+                    type: action.type,
+                    channelId: cat.id,
+                    name: cat.name
+                });
             } else if (action.type === "create_role") {
                 const me = guild.members.me;
                 if (me && !me.permissions.has(PermissionFlagsBits.ManageRoles)) {
@@ -335,6 +381,7 @@ module.exports = {
     executeActions,
     sanitizeAction,
     SAFE_SETTING_KEYS,
+    buildGuildSnapshot,
     formatAiUserError,
     getRemaining,
     DAILY_LIMIT
