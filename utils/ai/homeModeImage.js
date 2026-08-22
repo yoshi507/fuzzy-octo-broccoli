@@ -19,7 +19,7 @@
  */
 
 const DEFAULT_PATH = "/v1/images/generations";
-const FETCH_TIMEOUT_MS = 120_000;
+const FETCH_TIMEOUT_MS = 45_000;
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 
 function pickEnv(...names) {
@@ -178,7 +178,9 @@ async function generateHomeModeImage(prompt, opts = {}) {
     } catch (e) {
         clearTimeout(timer);
         if (e?.name === "AbortError") {
-            const err = new Error("Home Mode image request timed out");
+            const err = new Error(
+                "Home Mode image request timed out (45s). Check HOME_MODE_API_URL is reachable from the host."
+            );
             err.code = "IMAGE_TIMEOUT";
             throw err;
         }
