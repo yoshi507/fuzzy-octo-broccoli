@@ -107,7 +107,6 @@ function createApiApp(discordClient) {
   app.use('/guilds/:guildId/advisor', advisorRoutes);
   app.use('/guilds/:guildId/bot', botRouter);
   app.use('/guilds/:guildId/stats', statsRouter);
-  // Dashboard calls /appeals/* and /advertise/* (also keep /public/* aliases)
   app.use('/appeals', publicAppealsRoutes);
   app.use('/public/appeals', publicAppealsRoutes);
   app.use('/advertise', publicAdvertiseRoutes);
@@ -175,6 +174,9 @@ function startApiServer(discordClient) {
     activeServer.on('error', (err) => {
       console.error('❌ API server error:', err?.code || err?.message || err);
     });
+    try {
+      global.__omnibotHttpServer = activeServer;
+    } catch (_) {}
     return activeServer;
   } catch (err) {
     console.error('❌ Failed to start API server:', err?.message || err);
