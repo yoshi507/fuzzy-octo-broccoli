@@ -1,5 +1,5 @@
 /**
- * AI image generation - Cloudflare Workers AI only.
+ * AI image generation — Home Mode preferred, Cloudflare fallback.
  * ONE job at a time via generationQueue.
  */
 
@@ -8,6 +8,11 @@ const {
     enqueueGeneration,
     QUEUE_WAIT_MESSAGE
 } = require("./generationQueue.js");
+const {
+    isHomeModeConfigured,
+    getHomeModeStatus,
+    generateHomeModeImage
+} = require("./homeModeImage.js");
 const {
     isCloudflareConfigured,
     getCloudflareStatus,
@@ -36,33 +41,25 @@ let providerStatusLogged = false;
 function logProviderStatusOnce() {
     if (providerStatusLogged) return;
     providerStatusLogged = true;
+    const hm = getHomeModeStatus();
     const cf = getCloudflareStatus();
     logImg(
-        `provider cloudflare=${cf.configured ? "yes" : "no"}` +
-            ` (accountId=${cf.hasAccountId ? "set len=" + cf.accountIdLen : "MISSING"},` +
-            ` token=${cf.hasToken ? "set len=" + cf.tokenLen : "MISSING"})`
+        `provider homemode=${hm.configured ? "yes" : "no"}` +
+            ` cloudflare=${cf.configured ? "yes" : "no"}`
     );
-    if (!cf.configured) {
+    if (!hm.configured && !cf.configured) {
         logImg(
-            "HINT: set CLOUDFLARE_ACCOUNT_ID + CLOUDFLARE_API_TOKEN on the host, then fully restart"
+            "HINT: set HOME_MODE_API_URL + HOME_MODE_API_KEY (preferred) or Cloudflare credentials, then restart"
         );
     }
 }
 
-/** Text-to-image via Cloudflare. Name kept for compatibility. */
+/** Text-to-image. Name kept for compatibility. */
 async function fetchFluxImage(prompt, opts = {}) {
     const cleaned = String(prompt || "").trim();
     if (!cleaned) {
         const err = new Error("Prompt is required");
         err.code = "IMAGE_BAD_PROMPT";
-        throw err;
-    }
-
-    if (!isCloudflareConfigured()) {
-        const err = new Error(
-            "CLOUDFLARE_ACCOUNT_ID / CLOUDFLARE_API_TOKEN not configured"
-        );
-        err.code = "IMAGE_NOT_CONFIGURED";
         throw err;
     }
 
@@ -73,6 +70,26 @@ async function fetchFluxImage(prompt, opts = {}) {
 
     const width = clampDim(opts.width, DEFAULT_WIDTH);
     const height = clampDim(opts.height, DEFAULT_HEIGHT);
+
+    if (isHomeModeConfigured()) {
+        logImg("Home Mode image API");
+        return generateHomeModeImage(enhanced, {
+            width,
+            height,
+            seed: opts.seed,
+            steps: opts.steps,
+            guidance: opts.guidance,
+            negativePrompt: opts.negativePrompt
+        });
+    }
+
+    if (!isCloudflareConfigured()) {
+        const err = new Error(
+            "HOME_MODE_API_URL / HOME_MODE_API_KEY (or Cloudflare) not configured"
+        );
+        err.code = "IMAGE_NOT_CONFIGURED";
+        throw err;
+    }
 
     logImg("Cloudflare Workers AI text-to-image");
     return cfTextToImage(enhanced, {
@@ -85,7 +102,6 @@ async function fetchFluxImage(prompt, opts = {}) {
     });
 }
 
-/** Image-to-image via Cloudflare (video frame chain). */
 async function fetchImg2Img(prompt, referenceBuffer, opts = {}) {
     const cleaned = String(prompt || "").trim();
     if (!cleaned) {
@@ -137,9 +153,9 @@ async function generateGuildImage(guildId, prompt, opts = {}) {
         throw err;
     }
 
-    if (!isCloudflareConfigured()) {
+    if (!isHomeModeConfigured() && !isCloudflareConfigured()) {
         const err = new Error(
-            "No image provider configured (set CLOUDFLARE_ACCOUNT_ID + CLOUDFLARE_API_TOKEN)"
+            "No image provider configured (set HOME_MODE_API_URL + HOME_MODE_API_KEY)"
         );
         err.code = "IMAGE_NOT_CONFIGURED";
         throw err;
@@ -186,19 +202,19 @@ function formatImageUserError(error) {
         error.code === "IMAGE_NOT_CONFIGURED" ||
         error.code === "CF_NOT_CONFIGURED"
     ) {
-        return "❌ Image generation is not configured. Set `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN` on the host, then restart OmniBot.";
+        return "❌ Image generation is not configured. Set `HOME_MODE_API_URL` + `HOME_MODE_API_KEY` (or Cloudflare credentials) on the host, then restart OmniBot.";
     }
     if (error.code === "IMAGE_AUTH_FAILED" || error.code === "CF_AUTH_FAILED") {
-        return "❌ Cloudflare authentication failed. Check `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN` (token needs Workers AI Edit permission).";
+        return "❌ Image API authentication failed. Check `HOME_MODE_API_KEY` or Cloudflare credentials on the host.";
     }
     if (error.code === "IMAGE_RATE_LIMIT" || error.code === "CF_RATE_LIMIT") {
-        return "❌ Cloudflare is rate-limiting requests right now. Wait about a minute and try one image again.";
+        return "❌ The image service is rate-limiting requests. Wait a minute and try again.";
     }
     if (error.code === "CF_CAPACITY") {
-        return "❌ Cloudflare Workers AI is temporarily at capacity. Please try again in a moment.";
+        return "❌ Image service is temporarily at capacity. Please try again in a moment.";
     }
     if (error.code === "CF_MODEL_ERROR") {
-        return "❌ Cloudflare rejected the image model request. Check that Workers AI is enabled on the account and the API token has Workers AI permissions.";
+        return "❌ Image model request was rejected. Check API configuration.";
     }
     if (error.code === "IMAGE_BAD_PROMPT") {
         return "❌ Please provide a description of the image you want.";
@@ -212,13 +228,24 @@ function formatImageUserError(error) {
     if (error.code === "IMAGE_TOO_LARGE" || error.code === "CF_TOO_LARGE") {
         return "❌ The image was too large to process.";
     }
-    if (error.code === "CF_PROVIDER_ERROR" || error.code === "CF_NETWORK") {
-        return "❌ Cloudflare image generation failed. Please try again.";
+    if (
+        error.code === "CF_PROVIDER_ERROR" ||
+        error.code === "CF_NETWORK" ||
+        error.code === "IMAGE_PROVIDER_ERROR" ||
+        error.code === "IMAGE_NETWORK"
+    ) {
+        return "❌ Image generation failed. Please try again.";
     }
     return "❌ Image generation failed. Please try again.";
 }
 
+function isImageGenerationConfigured() {
+    return isHomeModeConfigured() || isCloudflareConfigured();
+}
+
 module.exports = {
+    isImageGenerationConfigured,
+    getHomeModeStatus,
     MODEL,
     generateGuildImage,
     fetchFluxImage,
