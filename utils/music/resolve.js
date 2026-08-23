@@ -1,7 +1,6 @@
 /**
  * Resolve play queries to streamable non-YouTube sources.
- * Primary: SoundCloud. Spotify URLs → metadata → SoundCloud search.
- * YouTube URLs are rejected.
+ * Primary: SoundCloud. Spotify URLs only if fully configured.
  */
 
 const play = require("play-dl");
@@ -10,32 +9,60 @@ const { withTimeout } = require("../withTimeout.js");
 let spotifyTokenReady = false;
 let spotifyAttempted = false;
 
-async function ensureSpotifyToken() {
-    if (spotifyTokenReady || spotifyAttempted) return;
-    spotifyAttempted = true;
-
-    const client_id = String(
+function sanitizeSpotifyEnv() {
+    const id = String(
         process.env.SPOTIFY_CLIENT_ID || process.env.SPOTIFY_CLIENTID || ""
     ).trim();
-    const client_secret = String(
+    const secret = String(
         process.env.SPOTIFY_CLIENT_SECRET ||
             process.env.SPOTIFY_CLIENTSECRET ||
             ""
     ).trim();
+    if (id && secret) return { ok: true, client_id: id, client_secret: secret };
 
-    // play-dl crashes with "Cannot read properties of undefined (reading 'client_id')"
-    // if setToken is called with incomplete spotify config — only set when both exist.
-    if (!client_id || !client_secret) {
-        console.log(
-            "[Music] Spotify credentials not set — Spotify links will not resolve (SoundCloud still works)"
+    for (const k of [
+        "SPOTIFY_CLIENT_ID",
+        "SPOTIFY_CLIENTID",
+        "SPOTIFY_CLIENT_SECRET",
+        "SPOTIFY_CLIENTSECRET",
+        "SPOTIFY_REFRESH_TOKEN",
+        "SPOTIFY_MARKET"
+    ]) {
+        if (process.env[k] !== undefined && !String(process.env[k] || "").trim()) {
+            try { delete process.env[k]; } catch (_) {}
+        }
+    }
+    if (id || secret) {
+        console.warn(
+            "[Music] Incomplete Spotify config (need BOTH client id and secret). Ignoring SPOTIFY_* for this process."
         );
-        return;
+        try {
+            delete process.env.SPOTIFY_CLIENT_ID;
+            delete process.env.SPOTIFY_CLIENTID;
+            delete process.env.SPOTIFY_CLIENT_SECRET;
+            delete process.env.SPOTIFY_CLIENTSECRET;
+            delete process.env.SPOTIFY_REFRESH_TOKEN;
+        } catch (_) {}
+    }
+    return { ok: false };
+}
+
+sanitizeSpotifyEnv();
+
+async function ensureSpotifyToken() {
+    if (spotifyTokenReady || spotifyAttempted) return spotifyTokenReady;
+    spotifyAttempted = true;
+
+    const creds = sanitizeSpotifyEnv();
+    if (!creds.ok) {
+        console.log("[Music] Spotify not configured — use SoundCloud links or song names");
+        return false;
     }
 
     try {
         const spotify = {
-            client_id,
-            client_secret,
+            client_id: creds.client_id,
+            client_secret: creds.client_secret,
             market: process.env.SPOTIFY_MARKET || "US"
         };
         const refresh = String(process.env.SPOTIFY_REFRESH_TOKEN || "").trim();
@@ -43,10 +70,12 @@ async function ensureSpotifyToken() {
 
         await play.setToken({ spotify });
         spotifyTokenReady = true;
-        console.log("[Music] Spotify credentials configured for play-dl");
+        console.log("[Music] Spotify credentials configured");
+        return true;
     } catch (e) {
         console.warn("[Music] Spotify token setup failed:", e?.message || e);
         spotifyTokenReady = false;
+        return false;
     }
 }
 
@@ -87,6 +116,7 @@ function isSpotifyUrl(input) {
 }
 
 async function searchSoundCloud(query) {
+    sanitizeSpotifyEnv();
     try {
         const results = await withTimeout(
             play.search(String(query).slice(0, 200), {
@@ -106,11 +136,12 @@ async function searchSoundCloud(query) {
         };
     } catch (e) {
         const msg = String(e?.message || e);
+        console.warn("[Music] SoundCloud search failed:", msg);
         if (/client_id/i.test(msg)) {
             const err = new Error(
-                "Music search hit a Spotify client_id error. Clear incomplete SPOTIFY_* env vars or set both SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET."
+                "SoundCloud search is temporarily unavailable. Paste a direct SoundCloud track URL instead."
             );
-            err.code = "MUSIC_SPOTIFY_CONFIG";
+            err.code = "MUSIC_SEARCH_FAILED";
             throw err;
         }
         throw e;
@@ -134,86 +165,62 @@ async function resolveTrack(query) {
     }
 
     if (isSpotifyUrl(q) || /^spotify:/i.test(q)) {
-        await ensureSpotifyToken();
-        if (!spotifyTokenReady) {
+        const ready = await ensureSpotifyToken();
+        if (!ready) {
             const err = new Error(
-                "Spotify links need SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET on the host, or paste a SoundCloud link / song name instead."
+                "Spotify links need both SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET. Or use a SoundCloud link / song name."
             );
-            err.code = "MUSIC_SPOTIFY_FAILED";
+            err.code = "MUSIC_SPOTIFY_CONFIG";
             throw err;
         }
 
         try {
             if (play.is_expired && (await play.is_expired())) {
-                try {
-                    await play.refreshToken();
-                } catch {
-                    /* ignore */
-                }
+                try { await play.refreshToken(); } catch { /* ignore */ }
             }
             const sp = await withTimeout(play.spotify(q), 15_000, "Spotify lookup");
             const name = sp?.name || "Unknown track";
             const artists = Array.isArray(sp?.artists)
-                ? sp.artists.map((a) => a.name || a).filter(Boolean).join(" ")
+                ? sp.artists.map((a) => a.name || a).filter(Boolean).join(", ")
                 : "";
-            const searchQ = `${name} ${artists}`.trim();
+            const searchQ = artists ? `${name} ${artists}` : name;
             const sc = await searchSoundCloud(searchQ);
-            if (sc) {
-                sc.title = `${name}${artists ? ` — ${artists}` : ""} (via SoundCloud)`;
-                return sc;
+            if (!sc) {
+                const err = new Error(
+                    `Found Spotify track “${name}” but no SoundCloud match. Try a SoundCloud link.`
+                );
+                err.code = "MUSIC_SPOTIFY_FAILED";
+                throw err;
             }
-            const err = new Error(
-                `Found Spotify track “${name}” but no SoundCloud match to stream.`
-            );
-            err.code = "MUSIC_NO_STREAM";
-            throw err;
+            return { ...sc, title: `${name}${artists ? ` — ${artists}` : ""}` };
         } catch (e) {
-            if (e?.code) throw e;
-            const err = new Error(
-                "Could not read that Spotify link. Use a SoundCloud link or song name."
-            );
+            if (e.code) throw e;
+            const err = new Error(e?.message || "Could not resolve that Spotify link.");
             err.code = "MUSIC_SPOTIFY_FAILED";
             throw err;
         }
     }
 
     if (isSoundCloudUrl(q)) {
-        try {
-            const info = await withTimeout(
-                play.soundcloud(q),
-                15_000,
-                "SoundCloud track info"
-            );
-            return {
-                title: info?.name || info?.title || "SoundCloud track",
-                url: q,
-                source: "soundcloud",
-                duration: info?.durationInSec || null
-            };
-        } catch {
-            return {
-                title: "SoundCloud track",
-                url: q,
-                source: "soundcloud",
-                duration: null
-            };
-        }
+        return { title: "SoundCloud track", url: q, source: "soundcloud", duration: null };
     }
 
     const sc = await searchSoundCloud(q);
-    if (sc) return sc;
-
-    const err = new Error(
-        "No SoundCloud results for that search. Try another query or a SoundCloud URL."
-    );
-    err.code = "MUSIC_NOT_FOUND";
-    throw err;
+    if (!sc) {
+        const err = new Error(
+            "No SoundCloud results for that search. Try different keywords or a SoundCloud URL."
+        );
+        err.code = "MUSIC_NO_RESULTS";
+        throw err;
+    }
+    return sc;
 }
 
 module.exports = {
     resolveTrack,
+    ensureSpotifyToken,
     isYoutubeUrl,
     isSoundCloudUrl,
     isSpotifyUrl,
-    ensureSpotifyToken
+    sanitizeSpotifyEnv
 };
