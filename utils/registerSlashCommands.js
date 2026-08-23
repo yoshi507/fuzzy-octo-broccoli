@@ -1,7 +1,7 @@
 /**
  * Register all slash commands with Discord.
  * ALWAYS registers GLOBAL commands so the bot profile shows "Supports Slash Commands".
- * Optionally also deploys to a guild for instant testing when SLASH_COMMANDS_GUILD_ID is set.
+ * Guild mirror is OFF by default — enabling both causes DUPLICATE commands in Discord.
  */
 
 const fs = require("fs");
@@ -16,7 +16,7 @@ function collectCommandJson() {
     }
 
     for (const file of fs.readdirSync(commandsPath)) {
-        if (!file.endsWith(".js")) continue;
+        if (!file.endsWith(".js") || file.startsWith("_")) continue;
         try {
             const command = require(path.join(commandsPath, file));
             if (command?.data?.toJSON) {
@@ -71,28 +71,44 @@ async function registerSlashCommands(client) {
         null;
 
     try {
-        // Global registration is required for the "Supports Slash Commands" profile badge
         console.log(
-            `[SlashRegister] Deploying ${body.length} GLOBAL application commands (profile badge)…`
+            `[SlashRegister] Deploying ${body.length} GLOBAL application commands…`
         );
         await rest.put(Routes.applicationCommands(clientId), { body });
         console.log(
             `✅ Registered ${body.length} global slash command(s). Badge can take a short while to appear on the bot profile.`
         );
 
-        if (guildId && process.env.SLASH_COMMANDS_GUILD_MIRROR !== "0") {
-            try {
-                await rest.put(Routes.applicationGuildCommands(clientId, guildId), {
-                    body
-                });
-                console.log(
-                    `✅ Mirrored ${body.length} command(s) to guild ${guildId} for instant testing`
-                );
-            } catch (err) {
-                console.warn(
-                    "[SlashRegister] Guild mirror failed:",
-                    err?.message || err
-                );
+        // Avoid DUPLICATE commands (global + guild = two of every command in the picker).
+        if (guildId) {
+            if (process.env.SLASH_COMMANDS_GUILD_MIRROR === "1") {
+                try {
+                    await rest.put(Routes.applicationGuildCommands(clientId, guildId), {
+                        body
+                    });
+                    console.log(
+                        `✅ Mirrored ${body.length} command(s) to guild ${guildId} (SLASH_COMMANDS_GUILD_MIRROR=1)`
+                    );
+                } catch (err) {
+                    console.warn(
+                        "[SlashRegister] Guild mirror failed:",
+                        err?.message || err
+                    );
+                }
+            } else {
+                try {
+                    await rest.put(Routes.applicationGuildCommands(clientId, guildId), {
+                        body: []
+                    });
+                    console.log(
+                        `[SlashRegister] Cleared guild-scoped commands on ${guildId} so they do not duplicate global commands`
+                    );
+                } catch (err) {
+                    console.warn(
+                        "[SlashRegister] Clearing guild commands failed:",
+                        err?.message || err
+                    );
+                }
             }
         }
 

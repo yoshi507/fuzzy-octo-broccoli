@@ -11,11 +11,12 @@ function loadCommands(client) {
 
     const commandFiles = fs
         .readdirSync(commandsPath)
-        .filter(file => file.endsWith(".js"));
+        .filter(file => file.endsWith(".js") && !file.startsWith("_"));
 
     let loaded = 0;
     for (const file of commandFiles) {
         const filePath = path.join(commandsPath, file);
+        if (fs.statSync(filePath).isDirectory()) continue;
         try {
             const command = require(filePath);
 
