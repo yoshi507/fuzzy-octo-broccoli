@@ -78,6 +78,20 @@ function readPath(guildId, storagePath) {
     }
   }
 
+  if (root === 'security') {
+    const sec = getGuildSecurity(guildId);
+    let node = sec;
+    for (let i = 1; i < parts.length; i++) {
+      if (node == null) return undefined;
+      node = node[parts[i]];
+    }
+    if (parts[1] === 'antiNuke' && parts[2] === 'windowMs') {
+      const ms = Number(node);
+      if (Number.isFinite(ms)) return Math.round(ms / 1000);
+    }
+    return node;
+  }
+
   if (root === 'deadChat') {
     const node = db.dashboard?.[guildId]?.deadChat || {};
     if (parts.length === 1) return node;
@@ -100,6 +114,23 @@ function writePath(guildId, storagePath, value) {
   const parts = storagePath.split('.');
   const root = parts[0];
   const db = loadDatabase();
+
+  if (root === 'security') {
+    const sec = getGuildSecurity(guildId);
+    const clone = JSON.parse(JSON.stringify(sec));
+    let node = clone;
+    for (let i = 1; i < parts.length - 1; i++) {
+      if (!node[parts[i]] || typeof node[parts[i]] !== 'object') node[parts[i]] = {};
+      node = node[parts[i]];
+    }
+    let val = value;
+    if (parts[parts.length - 1] === 'windowMs' && Number.isFinite(Number(value))) {
+      val = Math.max(5, Number(value)) * 1000;
+    }
+    node[parts[parts.length - 1]] = val;
+    setGuildSecurity(guildId, clone);
+    return;
+  }
 
   if (root === 'deadChat') {
     if (!db.dashboard) db.dashboard = {};
@@ -147,12 +178,24 @@ function getGuildSettings(guildId) {
 
 function applyPatch(guildId, patch, user) {
   const applied = {};
+  const errors = [];
   for (const [id, value] of Object.entries(patch || {})) {
     const setting = getSettingById(id);
     if (!setting) continue;
-    const validated = validateSetting(setting, value);
-    writePath(guildId, setting.path, validated);
-    applied[id] = validated;
+    const result = validateSetting(setting, value);
+    if (!result || result.ok === false) {
+      errors.push({ id, error: result?.error || 'Invalid value' });
+      continue;
+    }
+    writePath(guildId, setting.path, result.value);
+    applied[id] = result.value;
+  }
+  if (errors.length && !Object.keys(applied).length) {
+    const err = new Error(errors.map((e) => e.id + ': ' + e.error).join('; '));
+    err.status = 400;
+    err.code = 'VALIDATION';
+    err.errors = errors;
+    throw err;
   }
 
   const hist = loadHistory();
