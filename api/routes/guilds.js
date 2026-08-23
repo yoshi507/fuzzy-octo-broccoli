@@ -14,7 +14,11 @@ const {
 const router = express.Router();
 
 function getClient(req) {
-  return req.app.locals.discordClient;
+  return (
+    req.app.locals.discordClient ||
+    global.__omnibotClient ||
+    null
+  );
 }
 
 async function ensureDiscordAccessToken(req) {
@@ -66,7 +70,6 @@ async function loadUserGuilds(req, { force = false } = {}) {
     req.session.guildsCachedAt = Date.now();
     return guilds;
   } catch (err) {
-    // One retry after forced refresh when Discord rejects the token
     if (
       (err.code === 'DISCORD_GUILDS_UNAUTHORIZED' || err.discordStatus === 401) &&
       req.session.discordRefreshToken
@@ -110,9 +113,16 @@ async function assertCanManage(req, guildId) {
   }
 
   const client = getClient(req);
-  const botGuild = client?.guilds?.cache?.get(guildId);
+  let botGuild = client?.guilds?.cache?.get(String(guildId));
+  if (!botGuild && client?.guilds?.fetch) {
+    try {
+      botGuild = await client.guilds.fetch(String(guildId));
+    } catch (_) {
+      botGuild = null;
+    }
+  }
   if (!botGuild) {
-    const err = new Error('OmniBot is not in this server');
+    const err = new Error('OmniBot is not in this server (or Discord is still connecting).');
     err.status = 404;
     err.code = 'BOT_NOT_IN_GUILD';
     throw err;
@@ -161,9 +171,11 @@ router.get('/:guildId', requireAuth, async (req, res, next) => {
 router.get('/:guildId/channels', requireAuth, async (req, res, next) => {
   try {
     const { botGuild } = await assertCanManage(req, req.params.guildId);
-    const channels = [...botGuild.channels.cache.values()]
-      .filter((c) => c && (typeof c.isTextBased === 'function' ? c.isTextBased() || c.isVoiceBased?.() : true))
-      .filter((c) => c.type === 0 || c.type === 2 || c.type === 5 || c.type === 13 || c.type === 15)
+    try {
+      if (!botGuild.channels?.cache?.size) await botGuild.channels.fetch();
+    } catch (_) {}
+    const channels = [...(botGuild.channels?.cache?.values() || [])]
+      .filter((c) => c && (c.type === 0 || c.type === 2 || c.type === 5 || c.type === 13 || c.type === 15))
       .map((c) => ({ id: c.id, name: c.name, type: c.type }));
     res.json(channels);
   } catch (err) {
@@ -174,7 +186,10 @@ router.get('/:guildId/channels', requireAuth, async (req, res, next) => {
 router.get('/:guildId/roles', requireAuth, async (req, res, next) => {
   try {
     const { botGuild } = await assertCanManage(req, req.params.guildId);
-    const roles = [...botGuild.roles.cache.values()]
+    try {
+      if (!botGuild.roles?.cache?.size || botGuild.roles.cache.size < 2) await botGuild.roles.fetch();
+    } catch (_) {}
+    const roles = [...(botGuild.roles?.cache?.values() || [])]
       .filter((r) => r && r.id !== botGuild.id)
       .map((r) => ({ id: r.id, name: r.name, color: r.color }));
     res.json(roles);

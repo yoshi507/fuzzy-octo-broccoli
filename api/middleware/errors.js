@@ -24,6 +24,7 @@ function errorHandler(err, req, res, next) {
 
   if (isOpaqueServerError) {
     console.error('API error:', err?.code || err?.message || err);
+    if (err?.stack) console.error(err.stack);
   }
 
   const body = { error: true, code, message };
