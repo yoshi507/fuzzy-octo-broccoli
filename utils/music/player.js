@@ -11,6 +11,10 @@ const { ChannelType } = require("discord.js");
 const { spawn } = require("child_process");
 const { withTimeout } = require("../withTimeout.js");
 
+// Voice encryption — must load before first voice connection
+try { require("libsodium-wrappers"); } catch (_) {}
+try { require("@discordjs/opus"); } catch (_) {}
+
 const players = new Map();
 
 function getPlayer(guildId) {
@@ -170,6 +174,14 @@ function killFfmpeg(data) {
         }
         data.ffmpeg = null;
     }
+    if (data._ytdlp) {
+        try {
+            data._ytdlp.kill("SIGKILL");
+        } catch {
+            /* ignore */
+        }
+        data._ytdlp = null;
+    }
 }
 
 async function streamWithPlayDl(url, startSeconds = 0) {
@@ -194,9 +206,7 @@ function streamWithYtDlp(url, startSeconds = 0) {
         "--no-playlist",
         "--quiet",
         "--no-warnings",
-        "--extract-audio",
-        "--audio-format",
-        "mp3"
+        "--no-check-certificates"
     ];
     if (startSeconds > 0) {
         args.push("--download-sections", `*${startSeconds}-inf`);
@@ -205,6 +215,42 @@ function streamWithYtDlp(url, startSeconds = 0) {
 
     const proc = spawn("yt-dlp", args, {
         stdio: ["ignore", "pipe", "pipe"]
+    });
+    return proc;
+}
+
+/**
+ * Decode arbitrary audio (mp3/webm/…) to Discord-ready PCM via ffmpeg.
+ */
+function pipeThroughFfmpeg(inputStream) {
+    const proc = spawn(
+        "ffmpeg",
+        [
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-i",
+            "pipe:0",
+            "-analyzeduration",
+            "0",
+            "-f",
+            "s16le",
+            "-ar",
+            "48000",
+            "-ac",
+            "2",
+            "pipe:1"
+        ],
+        { stdio: ["pipe", "pipe", "pipe"] }
+    );
+    inputStream.pipe(proc.stdin);
+    inputStream.on("error", () => {
+        try { proc.kill("SIGKILL"); } catch (_) {}
+    });
+    proc.stdin.on("error", () => {});
+    proc.stderr.on("data", (chunk) => {
+        const line = chunk.toString().trim();
+        if (line) console.warn("[Music] ffmpeg:", line.slice(0, 180));
     });
     return proc;
 }
@@ -219,14 +265,19 @@ async function playSong(data, title, url, startSeconds = 0) {
 
     killFfmpeg(data);
 
+    try {
+        data.connection.subscribe(data.player);
+    } catch (_) {}
+
     let resource = null;
     let lastErr = null;
 
     try {
-        console.log(`[Music] play-dl stream: ${String(url).slice(0, 80)}`);
+        console.log(`[Music] play-dl stream: ${String(url).slice(0, 100)}`);
         const streamInfo = await streamWithPlayDl(url, startSeconds);
+        const inputType = streamInfo.type || StreamType.Arbitrary;
         resource = createAudioResource(streamInfo.stream, {
-            inputType: streamInfo.type || StreamType.Arbitrary,
+            inputType,
             inlineVolume: true
         });
     } catch (e) {
@@ -236,30 +287,32 @@ async function playSong(data, title, url, startSeconds = 0) {
 
     if (!resource) {
         try {
-            console.log(`[Music] yt-dlp stream: ${String(url).slice(0, 80)}`);
-            const proc = streamWithYtDlp(url, startSeconds);
-            data.ffmpeg = proc;
-            proc.stderr.on("data", (chunk) => {
-                const t = chunk.toString().trim();
-                if (t) console.log("[Music] yt-dlp:", t.slice(0, 200));
+            console.log(`[Music] yt-dlp+ffmpeg stream: ${String(url).slice(0, 100)}`);
+            const ytdlp = streamWithYtDlp(url, startSeconds);
+            ytdlp.stderr.on("data", (chunk) => {
+                const line = chunk.toString().trim();
+                if (line) console.log("[Music] yt-dlp:", line.slice(0, 200));
             });
-            proc.on("error", (err) => {
+            ytdlp.on("error", (err) => {
                 console.error("[Music] yt-dlp spawn error:", err?.message || err);
             });
-            resource = createAudioResource(proc.stdout, {
-                inputType: StreamType.Arbitrary,
+            const ff = pipeThroughFfmpeg(ytdlp.stdout);
+            data.ffmpeg = ff;
+            data._ytdlp = ytdlp;
+            resource = createAudioResource(ff.stdout, {
+                inputType: StreamType.Raw,
                 inlineVolume: true
             });
         } catch (e) {
             lastErr = e;
-            console.warn("[Music] yt-dlp failed:", e?.message || e);
+            console.warn("[Music] yt-dlp/ffmpeg failed:", e?.message || e);
         }
     }
 
     if (!resource) {
         const err = new Error(
             lastErr?.message ||
-                "Could not open an audio stream for that track (SoundCloud/play-dl/yt-dlp failed)."
+                "Could not open an audio stream (SoundCloud/play-dl/yt-dlp/ffmpeg failed)."
         );
         err.code = "MUSIC_STREAM_FAILED";
         throw err;
@@ -273,13 +326,13 @@ async function playSong(data, title, url, startSeconds = 0) {
     data.player.play(resource);
 
     try {
-        await entersState(data.player, AudioPlayerStatus.Playing, 12000);
+        await entersState(data.player, AudioPlayerStatus.Playing, 15000);
         console.log(`[Music] now playing: ${title}`);
     } catch {
         killFfmpeg(data);
         data.current = null;
         const err = new Error(
-            "Audio stream started but never reached Playing state. The host may be missing yt-dlp/ffmpeg or voice encryption packages."
+            "Audio stream started but never reached Playing state. Ensure ffmpeg is installed on the host and the bot has Speak permission."
         );
         err.code = "MUSIC_NOT_PLAYING";
         throw err;
