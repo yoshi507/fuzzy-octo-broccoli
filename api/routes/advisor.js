@@ -1,6 +1,6 @@
 const express = require('express');
 const { requireAuth } = require('../middleware/auth');
-const { assertCanManage } = require('../middleware/guildAccess');
+const { assertCanManage } = require('./guilds');
 const {
   analyzeGuild,
   executeActions,
