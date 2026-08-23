@@ -33,6 +33,12 @@ client.commands = new Collection();
 // Bind HTTP dashboard/API immediately so Wispbyte always has a listener on PORT,
 // even if Discord login is slow or fails.
 try {
+    console.log(
+        "[Startup] web env: PORT=" +
+            (process.env.PORT || "unset") +
+            " SERVER_PORT=" +
+            (process.env.SERVER_PORT || "unset")
+    );
     const { startApiServer } = require("./api/server.js");
     const srv = startApiServer(null);
     if (srv) {
@@ -40,6 +46,8 @@ try {
             global.__omnibotHttpServer = srv;
         } catch (_) {}
         console.log("[Startup] Dashboard/API bound early for Wispbyte");
+    } else {
+        console.error("[Startup] API server did not start (null). Website will stay offline.");
     }
 } catch (e) {
     console.error("[Startup] Failed to start API server early:", e?.message || e);

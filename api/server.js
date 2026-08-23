@@ -143,17 +143,61 @@ function createApiApp(discordClient) {
   return app;
 }
 
+function resolveListenPort() {
+  const candidates = [
+    ['PORT', process.env.PORT],
+    ['SERVER_PORT', process.env.SERVER_PORT],
+    ['WEB_PORT', process.env.WEB_PORT],
+    ['HTTP_PORT', process.env.HTTP_PORT],
+    ['APP_PORT', process.env.APP_PORT]
+  ];
+  for (const [name, raw] of candidates) {
+    const n = Number(raw);
+    if (Number.isFinite(n) && n > 0) {
+      return { port: n, source: name };
+    }
+  }
+  // Wispbyte panel historically used 13893 for this deployment
+  return { port: 13893, source: 'default:13893' };
+}
+
+function startMinimalHealthServer(port) {
+  const server = http.createServer((req, res) => {
+    if (req.url === '/health' || req.url === '/health/') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        ok: true,
+        service: 'OmniBot API (minimal)',
+        discordReady: Boolean(global.__omnibotClient),
+        uptime: process.uptime()
+      }));
+      return;
+    }
+    res.writeHead(503, { 'Content-Type': 'text/plain' });
+    res.end('OmniBot API is starting or in degraded mode. Retry shortly.');
+  });
+  server.listen(port, '0.0.0.0', () => {
+    console.log(`🌐 OmniBot minimal health server on 0.0.0.0:${port}`);
+  });
+  server.on('error', (err) => {
+    console.error('❌ Minimal API server error:', err?.code || err?.message || err);
+  });
+  return server;
+}
+
 function startApiServer(discordClient) {
   if (activeApp && discordClient) {
     activeApp.locals.discordClient = discordClient;
   }
-  if (activeServer) return activeServer;
-
-  const port = Number(process.env.PORT);
-  if (!Number.isFinite(port) || port <= 0) {
-    console.warn('⚠️ API server not started: set PORT environment variable.');
-    return null;
+  if (activeServer) {
+    try {
+      if (activeApp && discordClient) activeApp.locals.discordClient = discordClient;
+    } catch (_) {}
+    return activeServer;
   }
+
+  const { port, source } = resolveListenPort();
+  console.log(`[API] Binding web server on port ${port} (source=${source}) host=0.0.0.0`);
 
   try {
     activeApp = createApiApp(discordClient);
@@ -173,16 +217,30 @@ function startApiServer(discordClient) {
 
     activeServer.on('error', (err) => {
       console.error('❌ API server error:', err?.code || err?.message || err);
+      if (err && err.code === 'EADDRINUSE') {
+        console.error(`[API] Port ${port} already in use. Set PORT to the free port shown in the Wispbyte panel.`);
+      }
     });
     try {
       global.__omnibotHttpServer = activeServer;
     } catch (_) {}
     return activeServer;
   } catch (err) {
-    console.error('❌ Failed to start API server:', err?.message || err);
-    activeApp = null;
-    activeServer = null;
-    return null;
+    console.error('❌ Failed to start full API server:', err?.message || err);
+    console.error('[API] Falling back to minimal /health listener so the subdomain can come online.');
+    try {
+      activeApp = null;
+      activeServer = startMinimalHealthServer(port);
+      try {
+        global.__omnibotHttpServer = activeServer;
+      } catch (_) {}
+      return activeServer;
+    } catch (err2) {
+      console.error('❌ Minimal API fallback also failed:', err2?.message || err2);
+      activeApp = null;
+      activeServer = null;
+      return null;
+    }
   }
 }
 
