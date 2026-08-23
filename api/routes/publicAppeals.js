@@ -19,7 +19,7 @@ let directoryCache = {
 const DIRECTORY_TTL_MS = 60 * 60 * 1000;
 
 function getClient(req) {
-  return req.app.locals.discordClient;
+  return req.app.locals.discordClient || global.__omnibotClient || null;
 }
 
 function guildIconHash(guild) {
