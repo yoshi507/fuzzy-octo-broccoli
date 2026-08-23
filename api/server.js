@@ -157,7 +157,6 @@ function resolveListenPort() {
       return { port: n, source: name };
     }
   }
-  // Wispbyte panel historically used 13893 for this deployment
   return { port: 13893, source: 'default:13893' };
 }
 
@@ -189,20 +188,31 @@ function startApiServer(discordClient) {
   if (activeApp && discordClient) {
     activeApp.locals.discordClient = discordClient;
   }
-  if (activeServer) {
-    try {
-      if (activeApp && discordClient) activeApp.locals.discordClient = discordClient;
-    } catch (_) {}
-    return activeServer;
-  }
 
-  const { port, source } = resolveListenPort();
-  console.log(`[API] Binding web server on port ${port} (source=${source}) host=0.0.0.0`);
+  const early = global.__omnibotHttpServer;
 
   try {
-    activeApp = createApiApp(discordClient);
-    const tls = loadTlsOptions();
+    if (!activeApp) {
+      activeApp = createApiApp(discordClient);
+    } else if (discordClient) {
+      activeApp.locals.discordClient = discordClient;
+    }
 
+    global.__omnibotAppHandler = function omnibotAppHandler(req, res) {
+      return activeApp(req, res);
+    };
+
+    if (early && typeof early.listening === 'boolean') {
+      activeServer = early;
+      console.log('🌐 Express API attached to early web listener (dashboard + API routes live)');
+      return activeServer;
+    }
+
+    if (activeServer) return activeServer;
+
+    const { port, source } = resolveListenPort();
+    console.log(`[API] Binding web server on port ${port} (source=${source}) host=0.0.0.0`);
+    const tls = loadTlsOptions();
     if (tls) {
       activeServer = https.createServer(tls, activeApp);
       activeServer.listen(port, '0.0.0.0', () => {
@@ -214,26 +224,25 @@ function startApiServer(discordClient) {
         console.log(`🌐 OmniBot API listening on 0.0.0.0:${port} (HTTP — set SSL_KEY_PATH + SSL_CERT_PATH for HTTPS)`);
       });
     }
-
     activeServer.on('error', (err) => {
       console.error('❌ API server error:', err?.code || err?.message || err);
       if (err && err.code === 'EADDRINUSE') {
         console.error(`[API] Port ${port} already in use. Set PORT to the free port shown in the Wispbyte panel.`);
       }
     });
-    try {
-      global.__omnibotHttpServer = activeServer;
-    } catch (_) {}
+    try { global.__omnibotHttpServer = activeServer; } catch (_) {}
     return activeServer;
   } catch (err) {
     console.error('❌ Failed to start full API server:', err?.message || err);
-    console.error('[API] Falling back to minimal /health listener so the subdomain can come online.');
+    if (early) {
+      console.warn('[API] Full Express failed — early static dashboard listener remains active.');
+      return early;
+    }
     try {
+      const { port } = resolveListenPort();
       activeApp = null;
       activeServer = startMinimalHealthServer(port);
-      try {
-        global.__omnibotHttpServer = activeServer;
-      } catch (_) {}
+      try { global.__omnibotHttpServer = activeServer; } catch (_) {}
       return activeServer;
     } catch (err2) {
       console.error('❌ Minimal API fallback also failed:', err2?.message || err2);
