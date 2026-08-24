@@ -111,8 +111,7 @@ module.exports = {
                     err?.code === "MUSIC_STREAM_FAILED" ||
                     err?.code === "MUSIC_NOT_PLAYING"
                 ) {
-                    msg =
-                        "Found the track but could not play audio. Ensure ffmpeg is available and the bot can Speak.";
+                    msg = err.message || "Could not start audio playback.";
                 } else if (err?.code === "MUSIC_SEARCH_FAILED") {
                     msg =
                         "Music search is unavailable right now. Paste a direct SoundCloud track URL.";
