@@ -1,8 +1,12 @@
 /**
- * OmniBot music player — reliable Discord voice playback.
- * Pipeline: resolve URL → stream → ffmpeg PCM → @discordjs/voice
+ * OmniBot music player.
+ * Pipeline: URL → temp file → ffmpeg PCM → Discord voice
  */
 
+const fs = require("fs");
+const os = require("os");
+const path = require("path");
+const { spawn } = require("child_process");
 const {
     joinVoiceChannel,
     createAudioPlayer,
@@ -14,7 +18,6 @@ const {
     generateDependencyReport
 } = require("@discordjs/voice");
 const { ChannelType } = require("discord.js");
-const { spawn } = require("child_process");
 const { withTimeout } = require("../withTimeout.js");
 
 let depsLogged = false;
@@ -23,7 +26,7 @@ let sodiumReady = false;
 function resolveFfmpegPath() {
     try {
         const p = require("ffmpeg-static");
-        if (p) return p;
+        if (p && fs.existsSync(p)) return p;
     } catch (_) {}
     return process.env.FFMPEG_PATH || "ffmpeg";
 }
@@ -36,29 +39,34 @@ async function initVoiceDeps() {
         sodiumReady = true;
         console.log("[Music] libsodium-wrappers ready");
     } catch (e) {
-        console.warn("[Music] libsodium-wrappers not ready:", e?.message || e);
+        console.warn("[Music] libsodium-wrappers:", e?.message || e);
     }
     try {
         require("@discordjs/opus");
         console.log("[Music] @discordjs/opus loaded");
     } catch (e) {
-        console.warn("[Music] @discordjs/opus missing:", e?.message || e);
-        try { require("opusscript"); } catch (_) {}
+        console.warn("[Music] @discordjs/opus:", e?.message || e);
+        try {
+            require("opusscript");
+            console.log("[Music] opusscript loaded");
+        } catch (_) {}
     }
-    try { require("tweetnacl"); } catch (_) {}
+    try {
+        require("tweetnacl");
+    } catch (_) {}
 
     if (!depsLogged) {
         depsLogged = true;
         try {
-            console.log("[Music] voice dependency report:\n" + generateDependencyReport());
+            console.log("[Music] dependency report:\n" + generateDependencyReport());
         } catch (e) {
-            console.warn("[Music] dependency report failed:", e?.message || e);
+            console.warn("[Music] dep report:", e?.message || e);
         }
-        console.log("[Music] ffmpeg path:", resolveFfmpegPath());
+        console.log("[Music] ffmpeg:", resolveFfmpegPath());
     }
 }
 
-initVoiceDeps().catch((e) => console.warn("[Music] initVoiceDeps:", e?.message || e));
+initVoiceDeps().catch(() => {});
 
 const players = new Map();
 
@@ -71,6 +79,7 @@ function getPlayer(guildId) {
             queue: [],
             current: null,
             procs: [],
+            tempFiles: [],
             volume: 1,
             loop: "off",
             leaveTimer: null,
@@ -78,11 +87,13 @@ function getPlayer(guildId) {
         };
 
         player.on(AudioPlayerStatus.Idle, async () => {
+            cleanupTemps(data);
             if (!data.current) return;
             if (data.loop === "song") {
-                try { await playSong(data, data.current.title, data.current.url); }
-                catch (e) {
-                    console.error("[Music] loop replay failed:", e?.message || e);
+                try {
+                    await playSong(data, data.current.title, data.current.url);
+                } catch (e) {
+                    console.error("[Music] loop failed:", e?.message || e);
                     data.current = null;
                 }
                 return;
@@ -92,9 +103,10 @@ function getPlayer(guildId) {
             }
             if (data.queue.length > 0) {
                 const next = data.queue.shift();
-                try { await playSong(data, next.title, next.url); }
-                catch (e) {
-                    console.error("[Music] next track failed:", e?.message || e);
+                try {
+                    await playSong(data, next.title, next.url);
+                } catch (e) {
+                    console.error("[Music] next failed:", e?.message || e);
                     data.current = null;
                 }
             } else {
@@ -112,11 +124,105 @@ function getPlayer(guildId) {
 }
 
 function killProcs(data) {
-    const list = data.procs || [];
-    data.procs = [];
-    for (const proc of list) {
-        try { if (proc && !proc.killed) proc.kill("SIGKILL"); } catch (_) {}
+    for (const proc of data.procs || []) {
+        try {
+            if (proc && !proc.killed) proc.kill("SIGKILL");
+        } catch (_) {}
     }
+    data.procs = [];
+}
+
+function cleanupTemps(data) {
+    for (const f of data.tempFiles || []) {
+        try {
+            if (f && fs.existsSync(f)) fs.unlinkSync(f);
+        } catch (_) {}
+    }
+    data.tempFiles = [];
+}
+
+function tempPath(ext) {
+    return path.join(
+        os.tmpdir(),
+        `omnibot-music-${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`
+    );
+}
+
+async function downloadToFile(url) {
+    const out = tempPath("audio");
+    const ytdlpOk = await new Promise((resolve) => {
+        const args = [
+            "-f", "bestaudio/best", "-o", out,
+            "--no-playlist", "--no-warnings", "--no-check-certificates", url
+        ];
+        const proc = spawn("yt-dlp", args, { stdio: ["ignore", "pipe", "pipe"] });
+        let err = "";
+        proc.stderr.on("data", (c) => { err += c.toString(); });
+        proc.on("error", () => resolve(false));
+        proc.on("close", (code) => {
+            if (code === 0 && fs.existsSync(out) && fs.statSync(out).size > 1000) {
+                resolve(true);
+            } else {
+                if (err) console.warn("[Music] yt-dlp:", err.slice(0, 200));
+                try { if (fs.existsSync(out)) fs.unlinkSync(out); } catch (_) {}
+                resolve(false);
+            }
+        });
+    });
+    if (ytdlpOk) {
+        console.log("[Music] downloaded via yt-dlp:", out, fs.statSync(out).size);
+        return out;
+    }
+
+    try {
+        const play = require("play-dl");
+        console.log("[Music] play-dl download:", String(url).slice(0, 100));
+        const streamInfo = await withTimeout(
+            play.stream(url, { discordPlayerCompatibility: true }),
+            30000,
+            "play-dl stream"
+        );
+        const dest = tempPath("webm");
+        await new Promise((resolve, reject) => {
+            const ws = fs.createWriteStream(dest);
+            streamInfo.stream.pipe(ws);
+            streamInfo.stream.on("error", reject);
+            ws.on("error", reject);
+            ws.on("finish", resolve);
+        });
+        if (fs.existsSync(dest) && fs.statSync(dest).size > 1000) {
+            console.log("[Music] downloaded via play-dl:", dest, fs.statSync(dest).size);
+            return dest;
+        }
+        try { fs.unlinkSync(dest); } catch (_) {}
+    } catch (e) {
+        console.warn("[Music] play-dl download failed:", e?.message || e);
+    }
+
+    return null;
+}
+
+function spawnFfmpegFromFile(filePath) {
+    const bin = resolveFfmpegPath();
+    const proc = spawn(
+        bin,
+        [
+            "-hide_banner", "-loglevel", "error",
+            "-i", filePath,
+            "-analyzeduration", "0",
+            "-f", "s16le", "-ar", "48000", "-ac", "2",
+            "pipe:1"
+        ],
+        { stdio: ["ignore", "pipe", "pipe"] }
+    );
+    proc.stderr.on("data", (chunk) => {
+        const line = chunk.toString().trim();
+        if (line) console.warn("[Music] ffmpeg:", line.slice(0, 200));
+    });
+    proc.on("error", (err) => {
+        console.error("[Music] ffmpeg spawn error:", err?.message || err);
+    });
+    return proc;
 }
 
 async function connect(member) {
@@ -136,7 +242,7 @@ async function connect(member) {
     }
 
     if (existing?.connection) {
-        try { existing.connection.destroy(); } catch { /* ignore */ }
+        try { existing.connection.destroy(); } catch (_) {}
     }
 
     const connection = joinVoiceChannel({
@@ -149,11 +255,9 @@ async function connect(member) {
 
     try {
         await entersState(connection, VoiceConnectionStatus.Ready, 25000);
-    } catch (e) {
-        try { connection.destroy(); } catch { /* ignore */ }
-        throw new Error(
-            "Could not join the voice channel in time. Check Connect + Speak permissions."
-        );
+    } catch {
+        try { connection.destroy(); } catch (_) {}
+        throw new Error("Could not join voice in time. Need Connect + Speak permissions.");
     }
 
     const data = getPlayer(guild.id);
@@ -161,144 +265,37 @@ async function connect(member) {
     data.voiceChannelId = voiceChannel.id;
     connection.subscribe(data.player);
 
-    connection.on("stateChange", (oldState, newState) => {
-        if (oldState.status !== newState.status) {
-            console.log(`[Music] connection ${guild.id}: ${oldState.status} → ${newState.status}`);
-        }
-        if (newState.status === VoiceConnectionStatus.Disconnected) {
-            setTimeout(() => {
-                if (data.connection?.state?.status === VoiceConnectionStatus.Disconnected) {
-                    try { data.connection.destroy(); } catch { /* ignore */ }
-                    data.connection = null;
-                }
-            }, 5000);
+    connection.on("stateChange", (o, n) => {
+        if (o.status !== n.status) {
+            console.log(`[Music] conn ${guild.id}: ${o.status} → ${n.status}`);
         }
     });
-
-    const scheduleLeaveCheck = () => {
-        if (data.leaveTimer) clearTimeout(data.leaveTimer);
-        data.leaveTimer = setTimeout(() => {
-            const channel = guild.channels.cache.get(data.voiceChannelId);
-            if (!channel || channel.type !== ChannelType.GuildVoice) return;
-            const humans = channel.members.filter((m) => !m.user.bot);
-            if (humans.size === 0) {
-                console.log(`[Music] Leaving empty VC in ${guild.name}`);
-                destroy(guild.id);
-            }
-        }, 60000);
-    };
-
-    if (!data._voiceHooked) {
-        data._voiceHooked = true;
-        member.client.on("voiceStateUpdate", (oldState, newState) => {
-            if (oldState.channelId === data.voiceChannelId || newState.channelId === data.voiceChannelId) {
-                scheduleLeaveCheck();
-            }
-        });
-    }
 
     return data;
 }
 
-function spawnFfmpegPcm() {
-    const bin = resolveFfmpegPath();
-    const proc = spawn(
-        bin,
-        [
-            "-hide_banner", "-loglevel", "error",
-            "-i", "pipe:0",
-            "-analyzeduration", "0",
-            "-f", "s16le",
-            "-ar", "48000",
-            "-ac", "2",
-            "pipe:1"
-        ],
-        { stdio: ["pipe", "pipe", "pipe"] }
-    );
-    proc.stdin.on("error", () => {});
-    proc.stdout.on("error", () => {});
-    proc.stderr.on("data", (chunk) => {
-        const line = chunk.toString().trim();
-        if (line) console.warn("[Music] ffmpeg:", line.slice(0, 200));
-    });
-    proc.on("error", (err) => {
-        console.error("[Music] ffmpeg spawn error:", err?.message || err);
-    });
-    return proc;
-}
-
-async function openInputStream(url, startSeconds = 0) {
-    try {
-        const play = require("play-dl");
-        console.log(`[Music] play-dl open: ${String(url).slice(0, 100)}`);
-        const streamInfo = await withTimeout(
-            play.stream(url, {
-                seek: startSeconds > 0 ? startSeconds : undefined,
-                discordPlayerCompatibility: true
-            }),
-            25000,
-            "play-dl stream"
-        );
-        if (streamInfo?.stream) {
-            return { stream: streamInfo.stream, label: "play-dl", proc: null };
-        }
-    } catch (e) {
-        console.warn("[Music] play-dl open failed:", e?.message || e);
-    }
-
-    try {
-        console.log(`[Music] yt-dlp open: ${String(url).slice(0, 100)}`);
-        const args = [
-            "-f", "bestaudio/best", "-o", "-",
-            "--no-playlist", "--quiet", "--no-warnings", "--no-check-certificates"
-        ];
-        if (startSeconds > 0) args.push("--download-sections", `*${startSeconds}-inf`);
-        args.push(url);
-        const proc = spawn("yt-dlp", args, { stdio: ["ignore", "pipe", "pipe"] });
-        proc.stderr.on("data", (chunk) => {
-            const line = chunk.toString().trim();
-            if (line) console.log("[Music] yt-dlp:", line.slice(0, 180));
-        });
-        proc.on("error", (err) => {
-            console.error("[Music] yt-dlp spawn error:", err?.message || err);
-        });
-        return { stream: proc.stdout, label: "yt-dlp", proc };
-    } catch (e) {
-        console.warn("[Music] yt-dlp open failed:", e?.message || e);
-    }
-
-    return null;
-}
-
-async function playSong(data, title, url, startSeconds = 0) {
+async function playSong(data, title, url) {
     await initVoiceDeps();
-
     if (!data?.connection) throw new Error("Not connected to a voice channel.");
     if (/youtu\.be|youtube\.com/i.test(String(url))) {
-        throw new Error("YouTube streaming is disabled.");
+        throw new Error("YouTube is disabled.");
     }
 
     killProcs(data);
+    cleanupTemps(data);
     try { data.connection.subscribe(data.player); } catch (_) {}
 
-    const input = await openInputStream(url, startSeconds);
-    if (!input?.stream) {
-        const err = new Error("Could not open an audio stream (play-dl and yt-dlp both failed).");
+    console.log(`[Music] preparing: ${title} | ${String(url).slice(0, 120)}`);
+    const file = await downloadToFile(url);
+    if (!file) {
+        const err = new Error("Could not download audio. Try a direct SoundCloud track URL.");
         err.code = "MUSIC_STREAM_FAILED";
         throw err;
     }
+    data.tempFiles.push(file);
 
-    const ff = spawnFfmpegPcm();
+    const ff = spawnFfmpegFromFile(file);
     data.procs.push(ff);
-    if (input.proc) data.procs.push(input.proc);
-
-    input.stream.pipe(ff.stdin);
-    input.stream.on("error", (e) => {
-        console.warn("[Music] input stream error:", e?.message || e);
-        try { ff.stdin.destroy(); } catch (_) {}
-    });
-
-    await new Promise((r) => setTimeout(r, 200));
 
     const resource = createAudioResource(ff.stdout, {
         inputType: StreamType.Raw,
@@ -310,13 +307,14 @@ async function playSong(data, title, url, startSeconds = 0) {
     data.player.play(resource);
 
     try {
-        await entersState(data.player, AudioPlayerStatus.Playing, 20000);
-        console.log(`[Music] now playing: ${title} (via ${input.label}→ffmpeg PCM)`);
+        await entersState(data.player, AudioPlayerStatus.Playing, 25000);
+        console.log(`[Music] PLAYING: ${title}`);
     } catch {
         killProcs(data);
+        cleanupTemps(data);
         data.current = null;
         const err = new Error(
-            "Audio never reached Playing state. Check ffmpeg, Connect/Speak, and that the bot is not server-muted."
+            "Audio never started. Check bot is not server-muted and has Speak permission."
         );
         err.code = "MUSIC_NOT_PLAYING";
         throw err;
@@ -326,14 +324,12 @@ async function playSong(data, title, url, startSeconds = 0) {
 function destroy(guildId) {
     const data = players.get(guildId);
     if (!data) return;
-    if (data.leaveTimer) {
-        clearTimeout(data.leaveTimer);
-        data.leaveTimer = null;
-    }
+    if (data.leaveTimer) clearTimeout(data.leaveTimer);
     killProcs(data);
-    try { data.player.stop(true); } catch { /* ignore */ }
+    cleanupTemps(data);
+    try { data.player.stop(true); } catch (_) {}
     if (data.connection) {
-        try { data.connection.destroy(); } catch { /* ignore */ }
+        try { data.connection.destroy(); } catch (_) {}
     }
     players.delete(guildId);
 }
