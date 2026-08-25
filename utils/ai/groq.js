@@ -10,13 +10,12 @@ const { buildSystemPrompt, DEFAULT_BASE_PROMPT } = require("../persona/store.js"
 
 // Prefer current Groq production chat models (see console.groq.com/docs/models).
 // Older llama-*/gemma* ids are often decommissioned and return model_not_found.
-const PRIMARY_MODEL = process.env.GROQ_MODEL || "openai/gpt-oss-20b";
+const PRIMARY_MODEL = process.env.GROQ_MODEL || "llama-3.1-8b-instant";
 const FALLBACK_MODELS = [
     PRIMARY_MODEL,
-    "openai/gpt-oss-20b",
-    "openai/gpt-oss-120b",
     "llama-3.1-8b-instant",
     "llama-3.3-70b-versatile",
+    "openai/gpt-oss-20b",
     "meta-llama/llama-4-scout-17b-16e-instruct",
     "qwen/qwen3-32b"
 ].filter((v, i, a) => v && a.indexOf(v) === i);
@@ -96,6 +95,12 @@ function isProviderRateLimitError(error) {
     return false;
 }
 
+function isNetworkError(error) {
+    const msg = String(error?.message || error || "");
+    const code = String(error?.code || error?.cause?.code || "");
+    return /fetch failed|ECONNRESET|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|socket hang up|network/i.test(msg + " " + code);
+}
+
 function isAuthError(error) {
     const info = extractProviderError(error);
     if (info.status === 401 || info.status === 403) return true;
@@ -106,7 +111,6 @@ function isAuthError(error) {
 function isModelError(error) {
     const info = extractProviderError(error);
     const msg = info.message.toLowerCase();
-    // Do not treat request-parameter errors as "model unavailable"
     if (/max_tokens|max_completion|temperature|invalid parameter|unsupported parameter/.test(msg)) {
         return false;
     }
@@ -156,6 +160,9 @@ function formatAiUserError(error) {
     if (error.code === "AI_PROVIDER_ERROR") {
         return "❌ The AI service is temporarily unavailable. Try again in a moment.";
     }
+    if (error.code === "AI_NETWORK" || /fetch failed|ECONNRESET|ETIMEDOUT|ENOTFOUND|socket/i.test(String(error?.message || ""))) {
+        return "❌ Could not reach the AI service (network error). Check the host can access api.groq.com and try again.";
+    }
     return "❌ Something went wrong with AI. Please try again.";
 }
 
@@ -193,7 +200,6 @@ async function createCompletion(client, model, messages, options) {
         messages,
         temperature: options.temperature ?? 0.7
     };
-    // gpt-oss and many current Groq models prefer max_completion_tokens
     if (String(model).startsWith("openai/") || String(model).includes("gpt-oss")) {
         payload.max_completion_tokens = maxTokens;
     } else {
@@ -314,6 +320,12 @@ async function askAI(messages, options = {}) {
                 throw error;
             }
 
+            if (isNetworkError(apiError)) {
+                const error = new Error("AI network error");
+                error.code = "AI_NETWORK";
+                throw error;
+            }
+
             if (!isModelError(apiError)) {
                 break;
             }
@@ -326,6 +338,11 @@ async function askAI(messages, options = {}) {
             const error = new Error("AI model unavailable");
             error.code = "AI_MODEL_FAILED";
             error.status = info.status;
+            throw error;
+        }
+        if (isNetworkError(lastError)) {
+            const error = new Error("AI network error");
+            error.code = "AI_NETWORK";
             throw error;
         }
         const error = new Error("AI provider request failed");
