@@ -1,6 +1,6 @@
 /**
  * OmniBot music player — multi-strategy playback.
- * Tries: play-dl direct → download+probe → download+ffmpeg PCM
+ * Tries: SC progressive → play-dl direct → download+probe → ffmpeg PCM
  */
 
 const fs = require("fs");
@@ -19,6 +19,7 @@ const {
     generateDependencyReport
 } = require("@discordjs/voice");
 const { withTimeout } = require("../withTimeout.js");
+const sc = require("./soundcloud.js");
 
 let depsLogged = false;
 let sodiumReady = false;
@@ -154,7 +155,22 @@ function tempPath(ext) {
     );
 }
 
-async function downloadToFile(url) {
+async function downloadToFile(url, trackMeta = null) {
+    if (/soundcloud\.com/i.test(String(url)) || trackMeta?.source === "soundcloud") {
+        try {
+            const dest = tempPath("mp3");
+            const track =
+                trackMeta && trackMeta.url
+                    ? trackMeta
+                    : { title: "SoundCloud track", url, source: "soundcloud" };
+            await sc.downloadTrackToFile(track, dest);
+            console.log("[Music] SC progressive file:", dest, fs.statSync(dest).size);
+            return dest;
+        } catch (e) {
+            console.warn("[Music] SC progressive download failed:", e?.message || e);
+        }
+    }
+
     const outTpl = tempPath("audio");
     const ytdlp = await new Promise((resolve) => {
         const args = [
@@ -169,7 +185,7 @@ async function downloadToFile(url) {
             console.warn("[Music] yt-dlp missing:", e?.message || e);
             resolve(null);
         });
-        proc.on("close", (code) => {
+        proc.on("close", () => {
             const candidates = [outTpl, outTpl + ".mp3", outTpl + ".webm", outTpl + ".m4a", outTpl + ".opus"];
             for (const c of candidates) {
                 if (fs.existsSync(c) && fs.statSync(c).size > 2000) {
@@ -186,6 +202,10 @@ async function downloadToFile(url) {
 
     try {
         const play = require("play-dl");
+        try {
+            const { ensureSoundCloudAuth } = require("./resolve.js");
+            await ensureSoundCloudAuth();
+        } catch (_) {}
         const info = await withTimeout(
             play.stream(url, { discordPlayerCompatibility: true }),
             30000,
@@ -324,6 +344,39 @@ async function playSong(data, title, url) {
 
     console.log(`[Music] play request: ${title} | ${String(url).slice(0, 120)}`);
     const errors = [];
+    const trackMeta = { title, url, source: /soundcloud/i.test(String(url)) ? "soundcloud" : "unknown" };
+
+    if (/soundcloud/i.test(String(url))) {
+        try {
+            const scFile = await downloadToFile(url, trackMeta);
+            if (scFile) {
+                data.tempFiles.push(scFile);
+                try {
+                    const via = await tryPlayProbeFile(data, scFile);
+                    data.current = { title, url };
+                    console.log(`[Music] PLAYING via sc+${via}: ${title}`);
+                    return;
+                } catch (e) {
+                    errors.push("sc-probe: " + (e?.message || e));
+                    try { data.player.stop(true); } catch (_) {}
+                }
+                try {
+                    const via = await tryPlayFfmpegFile(data, scFile);
+                    data.current = { title, url };
+                    console.log(`[Music] PLAYING via sc+${via}: ${title}`);
+                    return;
+                } catch (e) {
+                    errors.push("sc-ffmpeg: " + (e?.message || e));
+                    try { data.player.stop(true); } catch (_) {}
+                }
+            } else {
+                errors.push("sc-download: failed");
+            }
+        } catch (e) {
+            errors.push("sc: " + (e?.message || e));
+            console.warn("[Music] SC path failed:", e?.message || e);
+        }
+    }
 
     try {
         const via = await tryPlayDirectPlayDl(data, url);
@@ -336,7 +389,7 @@ async function playSong(data, title, url) {
         try { data.player.stop(true); } catch (_) {}
     }
 
-    const file = await downloadToFile(url);
+    const file = await downloadToFile(url, trackMeta);
     if (file) data.tempFiles.push(file);
 
     if (file) {
