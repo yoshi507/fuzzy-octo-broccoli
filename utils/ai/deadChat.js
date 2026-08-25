@@ -1,5 +1,6 @@
 const fs = require("fs");
 const path = require("path");
+const { safeMkdir, safeWriteFile, isDiskError } = require("../safeFs.js");
 
 const dataDirectory = path.join(__dirname, "../../data");
 const settingsFile = path.join(dataDirectory, "dead-chat-settings.json");
@@ -9,11 +10,13 @@ let saveTimer = null;
 let dirty = false;
 
 function ensureStorage() {
-    if (!fs.existsSync(dataDirectory)) {
-        fs.mkdirSync(dataDirectory, { recursive: true });
-    }
-    if (!fs.existsSync(settingsFile)) {
-        fs.writeFileSync(settingsFile, "{}", "utf8");
+    try {
+        safeMkdir(dataDirectory);
+        if (!fs.existsSync(settingsFile)) safeWriteFile(settingsFile, "{}");
+        return true;
+    } catch (err) {
+        console.error("[DeadChat] ensureStorage:", err?.message || err);
+        return false;
     }
 }
 
@@ -32,8 +35,9 @@ function flushSettings() {
     if (!dirty || !memCache) return;
     ensureStorage();
     try {
-        fs.writeFileSync(settingsFile, JSON.stringify(memCache, null, 2));
-        dirty = false;
+        if (safeWriteFile(settingsFile, JSON.stringify(memCache))) {
+            dirty = false;
+        }
     } catch (e) {
         console.error("[DeadChat] save failed:", e?.message || e);
     }
