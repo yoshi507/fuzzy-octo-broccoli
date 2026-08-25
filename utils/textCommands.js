@@ -456,10 +456,15 @@ async function handleNaturalAI(message, prompt) {
             await message.reply(limitReachedMessage(message.guild.id));
             return;
         }
-        console.error(
-            "Natural AI error:",
-            error?.code || error?.message || error
-        );
+        const code = String(error?.code || "");
+        const msg = String(error?.message || error || "");
+        console.error("Natural AI error:", code || msg.slice(0, 200));
+        if (code === "ENOSPC" || /ENOSPC|no space left on device/i.test(msg)) {
+            await message.reply(
+                "❌ Host disk is full (ENOSPC). Free space on Wispbyte, then restart OmniBot."
+            );
+            return;
+        }
         await message.reply(formatAiUserError(error));
     }
 }
