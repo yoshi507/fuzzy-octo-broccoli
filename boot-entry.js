@@ -7,7 +7,7 @@ try {
 } catch (e) {
     if (e && (e.code === "ENOSPC" || /no space left/i.test(String(e.message || "")))) {
         console.error(
-            "[Boot] ENOSPC: host disk is FULL. Free space on Wispbyte before OmniBot can save data or register commands."
+            "[Boot] ENOSPC/EDQUOT on write probe. Run: df -h && df -i && df -h /tmp — free space OR inodes, clean /tmp and logs, then restart."
         );
     } else {
         console.warn("[Boot] disk probe failed:", e?.message || e);
