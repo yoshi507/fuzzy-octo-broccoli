@@ -30,8 +30,6 @@ const client = new Client({
 
 client.commands = new Collection();
 
-// Bind HTTP dashboard/API immediately so Wispbyte always has a listener on PORT,
-// even if Discord login is slow or fails.
 try {
     console.log(
         "[Startup] web env: PORT=" +
@@ -60,7 +58,8 @@ const eventNameMap = {
     messageDelete: Events.MessageDelete,
     interactionCreate: Events.InteractionCreate,
     clientReady: Events.ClientReady,
-    ready: Events.ClientReady
+    ready: Events.ClientReady,
+    threadCreate: Events.ThreadCreate
 };
 
 try {
