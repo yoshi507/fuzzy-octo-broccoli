@@ -32,6 +32,49 @@ module.exports = {
             console.error("[AutoRole] error:", e?.message || e);
         }
 
+        // CAPTCHA VERIFICATION
+        try {
+            const { getConfig, createChallenge } = require("../utils/captcha/store.js");
+            const {
+                ActionRowBuilder,
+                ButtonBuilder,
+                ButtonStyle,
+                EmbedBuilder
+            } = require("discord.js");
+            const cfg = getConfig(member.guild.id);
+            if (cfg.enabled && cfg.channelId) {
+                if (cfg.unverifiedRoleId) {
+                    await member.roles.add(cfg.unverifiedRoleId).catch(() => {});
+                }
+                const challenge = createChallenge(member.guild.id, member.id);
+                let channel =
+                    member.guild.channels.cache.get(cfg.channelId) ||
+                    (await member.guild.channels.fetch(cfg.channelId).catch(() => null));
+                if (channel?.isTextBased?.()) {
+                    const row = new ActionRowBuilder().addComponents(
+                        new ButtonBuilder()
+                            .setCustomId(`captcha_solve:${challenge.token}`)
+                            .setLabel("Verify")
+                            .setStyle(ButtonStyle.Primary)
+                    );
+                    await channel.send({
+                        content: `${member}`,
+                        embeds: [
+                            new EmbedBuilder()
+                                .setColor(0x5865f2)
+                                .setTitle("Verification required")
+                                .setDescription(
+                                    `Welcome ${member}! Click **Verify** and answer:\n\n**${challenge.prompt}**`
+                                )
+                        ],
+                        components: [row]
+                    });
+                }
+            }
+        } catch (e) {
+            console.error("[Captcha] join error:", e?.message || e);
+        }
+
         // WELCOME MESSAGE
         try {
             const welcomeSettings = database.welcomeSettings?.[member.guild.id];
@@ -69,7 +112,7 @@ module.exports = {
 
             const message = String(
                 welcomeSettings.message ||
-                    "👋 Welcome {user} to **{server}**! You are member **#{membercount}**."
+                    "👋 Welcome {user} to **{server}**! You are member **#{membercount}."
             )
                 .replaceAll("{user}", `<@${member.id}>`)
                 .replaceAll("{username}", member.user.username)
