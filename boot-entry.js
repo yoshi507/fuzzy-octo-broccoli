@@ -1,3 +1,19 @@
+// Preflight: warn if the host is out of disk (ENOSPC breaks AI, DB, and command deploy)
+try {
+    const fs = require("fs");
+    const probe = require("path").join(process.cwd(), ".omnibot-disk-probe");
+    fs.writeFileSync(probe, String(Date.now()));
+    fs.unlinkSync(probe);
+} catch (e) {
+    if (e && (e.code === "ENOSPC" || /no space left/i.test(String(e.message || "")))) {
+        console.error(
+            "[Boot] ENOSPC: host disk is FULL. Free space on Wispbyte before OmniBot can save data or register commands."
+        );
+    } else {
+        console.warn("[Boot] disk probe failed:", e?.message || e);
+    }
+}
+
 /**
  * Preferred process entry on Wispbyte / npm start.
  * Binds PORT immediately (before Discord / heavy requires) so the subdomain
