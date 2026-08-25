@@ -7,16 +7,7 @@ if (!fs.existsSync("./database")) {
 }
 
 if (!fs.existsSync(databaseFile)) {
-    fs.writeFileSync(
-        databaseFile,
-        JSON.stringify(
-            {
-                warnings: []
-            },
-            null,
-            2
-        )
-    );
+    fs.writeFileSync(databaseFile, JSON.stringify({ warnings: [] }));
 }
 
 /** In-memory cache — avoids re-reading disk on every message event. */
@@ -34,7 +25,18 @@ function loadDatabase() {
 
 function saveDatabase(data) {
     cache = data || cache || { warnings: [] };
-    fs.writeFileSync(databaseFile, JSON.stringify(cache, null, 2));
+    try {
+        // Compact JSON — less disk than pretty-print
+        fs.writeFileSync(databaseFile, JSON.stringify(cache));
+    } catch (err) {
+        if (err && (err.code === "ENOSPC" || /no space left/i.test(String(err.message || "")))) {
+            console.error(
+                "[Database] ENOSPC: disk full — cannot save. Free space on the host and restart."
+            );
+            return;
+        }
+        console.error("[Database] save failed:", err?.message || err);
+    }
 }
 
 function invalidateDatabaseCache() {
