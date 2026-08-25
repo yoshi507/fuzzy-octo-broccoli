@@ -85,6 +85,15 @@ async function registerSlashCommands(client) {
         `[SlashRegister] Command set (${body.length}): ${names.join(", ")}`
     );
 
+    const featureNames = ["swearjar", "automation", "captcha", "userphone", "forumhelp"];
+    const present = featureNames.filter((n) => names.includes(n));
+    const missing = featureNames.filter((n) => !names.includes(n));
+    console.log(
+        `[SlashRegister] Feature slash present: ${present.join(", ") || "(none)"}${
+            missing.length ? ` | MISSING: ${missing.join(", ")}` : ""
+        }`
+    );
+
     const rest = new REST({ version: "10" }).setToken(token);
 
     try {
