@@ -33,6 +33,52 @@ module.exports = {
             /* non-fatal */
         }
 
+        // Userphone relay
+        try {
+            const up = require("../utils/userphone/store.js");
+            const session = up.getSession(message.channel.id);
+            if (session && message.content) {
+                const partner = up.partnerChannel(session, message.channel.id);
+                if (partner) {
+                    const ch = await message.client.channels.fetch(partner.channelId).catch(() => null);
+                    if (ch?.isTextBased?.()) {
+                        const text = message.content.slice(0, 1800);
+                        await ch.send(`📞 **Anonymous:** ${text}`).catch(() => {});
+                    }
+                }
+            }
+        } catch (e) {
+            console.error("[Userphone] relay:", e?.message || e);
+        }
+
+        // Swear jar
+        try {
+            const { processMessage: swearProcess } = require("../utils/features/swearJar.js");
+            const hit = swearProcess(message);
+            if (hit?.hit) {
+                await message.reply({
+                    content: `🫙 Swear jar! You used a banned word and paid **${hit.fine}** coins. Balance: **${hit.newBalance}**.`
+                }).catch(() => {});
+            }
+        } catch (e) {
+            console.error("[SwearJar]", e?.message || e);
+        }
+
+        // Automations
+        try {
+            const autoStore = require("../utils/automations/store.js");
+            const rules = autoStore.processMessage(message);
+            for (const rule of rules) {
+                if (rule.action === "reply" && rule.response) {
+                    await message.reply({ content: rule.response.slice(0, 1500) }).catch(() => {});
+                } else if (rule.action === "react" && rule.emoji) {
+                    await message.react(rule.emoji).catch(() => {});
+                }
+            }
+        } catch (e) {
+            console.error("[Automation]", e?.message || e);
+        }
+
         try {
             const wasInvocation = await handleTextInvocation(message);
             if (wasInvocation) return;
