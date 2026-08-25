@@ -7,27 +7,62 @@ const limitFile = path.join(dataDirectory, "ai-limits.json");
 /** Fixed daily AI request allowance per server. Not configurable. */
 const DAILY_LIMIT = 20;
 
+/** In-memory fallback when disk is full so AI can still respond. */
+let memoryLimits = null;
+
 function ensureStorage() {
-    if (!fs.existsSync(dataDirectory)) {
-        fs.mkdirSync(dataDirectory, { recursive: true });
-    }
-    if (!fs.existsSync(limitFile)) {
-        fs.writeFileSync(limitFile, "{}", "utf8");
+    try {
+        if (!fs.existsSync(dataDirectory)) {
+            fs.mkdirSync(dataDirectory, { recursive: true });
+        }
+        if (!fs.existsSync(limitFile)) {
+            fs.writeFileSync(limitFile, "{}", "utf8");
+        }
+        return true;
+    } catch (err) {
+        if (err && (err.code === "ENOSPC" || /no space left/i.test(String(err.message || "")))) {
+            console.error(
+                "[AI Limit] ENOSPC: cannot create ai-limits.json — using in-memory limits until disk is freed."
+            );
+        } else {
+            console.error("[AI Limit] ensureStorage failed:", err?.message || err);
+        }
+        return false;
     }
 }
 
 function loadLimits() {
-    ensureStorage();
+    if (memoryLimits) return memoryLimits;
+    const ok = ensureStorage();
+    if (!ok) {
+        memoryLimits = memoryLimits || {};
+        return memoryLimits;
+    }
     try {
-        return JSON.parse(fs.readFileSync(limitFile, "utf8"));
+        const data = JSON.parse(fs.readFileSync(limitFile, "utf8"));
+        memoryLimits = data && typeof data === "object" ? data : {};
+        return memoryLimits;
     } catch {
-        return {};
+        memoryLimits = memoryLimits || {};
+        return memoryLimits;
     }
 }
 
 function saveLimits(limits) {
-    ensureStorage();
-    fs.writeFileSync(limitFile, JSON.stringify(limits, null, 2), "utf8");
+    memoryLimits = limits || memoryLimits || {};
+    try {
+        if (!ensureStorage()) return;
+        // Compact JSON to save disk
+        fs.writeFileSync(limitFile, JSON.stringify(memoryLimits), "utf8");
+    } catch (err) {
+        if (err && (err.code === "ENOSPC" || /no space left/i.test(String(err.message || "")))) {
+            console.error(
+                "[AI Limit] ENOSPC: could not persist ai-limits.json — keeping counts in memory only."
+            );
+            return;
+        }
+        console.error("[AI Limit] save failed:", err?.message || err);
+    }
 }
 
 function getToday() {
@@ -83,19 +118,29 @@ function canUseAI(guildId) {
     if (!guildId) {
         return true;
     }
-    const limits = loadLimits();
-    const entry = normalizeGuildEntry(limits, guildId);
-    return entry.count < getGuildDailyLimit(guildId);
+    try {
+        const limits = loadLimits();
+        const entry = normalizeGuildEntry(limits, guildId);
+        return entry.count < getGuildDailyLimit(guildId);
+    } catch (err) {
+        console.error("[AI Limit] canUseAI failed:", err?.message || err);
+        return true;
+    }
 }
 
 function useAI(guildId) {
     if (!guildId) {
         return;
     }
-    const limits = loadLimits();
-    const entry = normalizeGuildEntry(limits, guildId);
-    entry.count++;
-    saveLimits(limits);
+    try {
+        const limits = loadLimits();
+        const entry = normalizeGuildEntry(limits, guildId);
+        entry.count++;
+        saveLimits(limits);
+    } catch (err) {
+        // Never let limit tracking break a successful AI reply
+        console.error("[AI Limit] useAI failed:", err?.message || err);
+    }
 }
 
 function getRemaining(guildId) {
@@ -103,9 +148,13 @@ function getRemaining(guildId) {
     if (!guildId) {
         return limit;
     }
-    const limits = loadLimits();
-    const entry = normalizeGuildEntry(limits, guildId);
-    return Math.max(0, limit - entry.count);
+    try {
+        const limits = loadLimits();
+        const entry = normalizeGuildEntry(limits, guildId);
+        return Math.max(0, limit - entry.count);
+    } catch {
+        return limit;
+    }
 }
 
 function getUsage(guildId) {
