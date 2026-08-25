@@ -8,8 +8,6 @@ const {
 } = require("./aiLimit.js");
 const { buildSystemPrompt, DEFAULT_BASE_PROMPT } = require("../persona/store.js");
 
-// Prefer current Groq production chat models (see console.groq.com/docs/models).
-// Older llama-*/gemma* ids are often decommissioned and return model_not_found.
 const PRIMARY_MODEL = process.env.GROQ_MODEL || "llama-3.1-8b-instant";
 const FALLBACK_MODELS = [
     PRIMARY_MODEL,
@@ -31,10 +29,8 @@ function resolveGroqApiKey() {
         process.env.GROQ_KEY ||
         process.env.GROQ_TOKEN ||
         "";
-    // Strip quotes, whitespace, and accidental "Bearer " prefix from host env UIs
     let key = String(raw).trim().replace(/^["']|["']$/g, "");
     if (/^bearer\s+/i.test(key)) key = key.replace(/^bearer\s+/i, "").trim();
-    // Remove zero-width / BOM characters that sometimes get pasted into panels
     key = key.replace(/[\u200B-\u200D\uFEFF]/g, "").trim();
     return key || null;
 }
@@ -158,11 +154,23 @@ function formatAiUserError(error) {
         return "❌ Omni didn't return a response.";
     }
     if (error.code === "AI_PROVIDER_ERROR") {
+        if (error.status === 401 || error.status === 403) {
+            return "❌ AI authentication failed. Update `GROQ_API_KEY` on the host with a valid key from console.groq.com, then restart.";
+        }
+        if (error.status === 429) {
+            return globalLimitReachedMessage();
+        }
         return "❌ The AI service is temporarily unavailable. Try again in a moment.";
     }
     if (error.code === "AI_NETWORK" || /fetch failed|ECONNRESET|ETIMEDOUT|ENOTFOUND|socket/i.test(String(error?.message || ""))) {
         return "❌ Could not reach the AI service (network error). Check the host can access api.groq.com and try again.";
     }
+    console.error(
+        "[AI] Unmapped user error code=",
+        error.code,
+        "msg=",
+        String(error.message || "").slice(0, 200)
+    );
     return "❌ Something went wrong with AI. Please try again.";
 }
 
@@ -334,6 +342,12 @@ async function askAI(messages, options = {}) {
 
     if (!completion) {
         const info = extractProviderError(lastError || {});
+        if (isAuthError(lastError)) {
+            const error = new Error("Groq authentication failed");
+            error.code = "AI_AUTH_FAILED";
+            error.status = info.status;
+            throw error;
+        }
         if (isModelError(lastError)) {
             const error = new Error("AI model unavailable");
             error.code = "AI_MODEL_FAILED";
@@ -343,6 +357,12 @@ async function askAI(messages, options = {}) {
         if (isNetworkError(lastError)) {
             const error = new Error("AI network error");
             error.code = "AI_NETWORK";
+            throw error;
+        }
+        if (isProviderRateLimitError(lastError)) {
+            const error = new Error("Global AI provider limit reached");
+            error.code = "AI_GLOBAL_LIMIT";
+            error.status = info.status;
             throw error;
         }
         const error = new Error("AI provider request failed");
