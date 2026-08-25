@@ -133,8 +133,17 @@ function isLimitError(error) {
     );
 }
 
+function isDiskFullError(error) {
+    const code = String(error?.code || "");
+    const msg = String(error?.message || error || "");
+    return code === "ENOSPC" || /ENOSPC|no space left on device/i.test(msg);
+}
+
 function formatAiUserError(error) {
     if (!error) return "❌ Something went wrong with AI.";
+    if (isDiskFullError(error)) {
+        return "❌ Host disk is full (ENOSPC). Free space on Wispbyte, then restart OmniBot.";
+    }
     if (error.code === "AI_DAILY_LIMIT") {
         return limitReachedMessage(error.guildId);
     }
