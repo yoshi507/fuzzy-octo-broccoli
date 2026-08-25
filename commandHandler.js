@@ -11,7 +11,7 @@ function loadCommands(client) {
 
     const commandFiles = fs
         .readdirSync(commandsPath)
-        .filter(file => file.endsWith(".js") && !file.startsWith("_"));
+        .filter((file) => file.endsWith(".js") && !file.startsWith("_"));
 
     let loaded = 0;
     for (const file of commandFiles) {
@@ -29,14 +29,30 @@ function loadCommands(client) {
                 );
             }
         } catch (error) {
-            console.error(
-                `❌ Failed to load command ${file}:`,
-                error.message
-            );
+            console.error(`❌ Failed to load command ${file}:`, error.message);
         }
     }
 
     console.log(`✅ Loaded ${loaded} command(s)`);
+
+    const featureCmds = [
+        "swearjar",
+        "automation",
+        "captcha",
+        "userphone",
+        "forumhelp"
+    ];
+    const missing = featureCmds.filter((n) => !client.commands.has(n));
+    if (missing.length) {
+        console.warn(
+            "[Commands] Missing feature commands:",
+            missing.join(", ")
+        );
+    } else {
+        console.log(
+            "[Commands] Feature commands OK: swearjar, automation, captcha, userphone, forumhelp"
+        );
+    }
 }
 
 module.exports = { loadCommands };
