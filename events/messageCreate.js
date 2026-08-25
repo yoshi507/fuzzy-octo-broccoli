@@ -178,7 +178,7 @@ module.exports = {
 
         try {
             if (!database.spam) database.spam = {};
-            if (!database.spam[message.guild.id]) {
+            if (!database.spam[message.guild.id] || typeof database.spam[message.guild.id] !== "object") {
                 database.spam[message.guild.id] = {};
             }
 
@@ -190,20 +190,22 @@ module.exports = {
                 const userId = message.author.id;
                 const now = Date.now();
 
-                if (!guildSpam[userId]) {
-                    guildSpam[userId] = [];
+                // Legacy data may store objects/numbers instead of timestamp arrays
+                let timestamps = guildSpam[userId];
+                if (!Array.isArray(timestamps)) {
+                    timestamps = [];
                 }
-
-                guildSpam[userId] = guildSpam[userId].filter(
-                    (t) => now - t < 7000
+                timestamps = timestamps.filter(
+                    (ts) => typeof ts === "number" && now - ts < 7000
                 );
-                guildSpam[userId].push(now);
+                timestamps.push(now);
+                guildSpam[userId] = timestamps;
 
-                if (guildSpam[userId].length >= 5) {
+                if (timestamps.length >= 5) {
                     saveDatabase(database);
                 }
 
-                if (guildSpam[userId].length >= 6) {
+                if (timestamps.length >= 6) {
                     const member = message.member;
                     if (member?.moderatable) {
                         await member
