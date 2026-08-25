@@ -1,6 +1,7 @@
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
+const { safeMkdir, safeWriteFile, isDiskError } = require("../safeFs.js");
 
 const file = path.join(__dirname, "../../data/persona.json");
 const assetsRoot = path.join(__dirname, "../../data/persona-assets");
@@ -32,15 +33,28 @@ const MAX_AVATAR_BYTES = 2 * 1024 * 1024;
 const MAX_BANNER_BYTES = 4 * 1024 * 1024;
 
 function ensure() {
-    const dir = path.dirname(file);
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-    if (!fs.existsSync(file)) fs.writeFileSync(file, "{}", "utf8");
-    if (!fs.existsSync(assetsRoot)) fs.mkdirSync(assetsRoot, { recursive: true });
+    try {
+        const dir = path.dirname(file);
+        safeMkdir(dir);
+        safeMkdir(assetsRoot);
+        if (!fs.existsSync(file)) {
+            safeWriteFile(file, "{}");
+        }
+    } catch (err) {
+        if (isDiskError(err)) {
+            console.error("[Persona] ENOSPC during ensure — continuing without disk");
+            return false;
+        }
+        console.error("[Persona] ensure failed:", err?.message || err);
+        return false;
+    }
+    return true;
 }
 
 function load() {
     ensure();
     try {
+        if (!fs.existsSync(file)) return {};
         return JSON.parse(fs.readFileSync(file, "utf8"));
     } catch {
         return {};
@@ -48,8 +62,18 @@ function load() {
 }
 
 function save(data) {
-    ensure();
-    fs.writeFileSync(file, JSON.stringify(data, null, 2), "utf8");
+    try {
+        ensure();
+        if (!safeWriteFile(file, JSON.stringify(data || {}))) {
+            console.error("[Persona] save skipped — disk write failed");
+        }
+    } catch (err) {
+        if (isDiskError(err)) {
+            console.error("[Persona] ENOSPC on save — in-memory only until restart");
+            return;
+        }
+        console.error("[Persona] save failed:", err?.message || err);
+    }
 }
 
 function getPersona(guildId) {
@@ -151,10 +175,20 @@ function saveGuildImage(guildId, kind, dataUrl) {
         throw err;
     }
     const guildDir = path.join(assetsRoot, id);
-    if (!fs.existsSync(guildDir)) fs.mkdirSync(guildDir, { recursive: true });
+    if (!safeMkdir(guildDir)) {
+        const err = new Error("Host cannot write image (disk/quota/inodes)");
+        err.status = 507;
+        err.code = "ENOSPC";
+        throw err;
+    }
     const filename = `${kind}-${crypto.randomBytes(6).toString("hex")}.${ext}`;
     const abs = path.join(guildDir, filename);
-    fs.writeFileSync(abs, buf);
+    if (!safeWriteFile(abs, buf)) {
+        const err = new Error("Host cannot write image (disk/quota/inodes)");
+        err.status = 507;
+        err.code = "ENOSPC";
+        throw err;
+    }
     const relPath = path.join(id, filename).replace(/\\/g, "/");
     const current = getPersona(id);
     if (kind === "avatar") {
