@@ -1,5 +1,15 @@
-console.log("[Startup] deployMarker=2026-08-26-feature-pack-v2");
-require("dotenv").config();
+console.log("[Startup] deployMarker=2026-08-26-feature-pack-v3-slim-deps");
+try {
+    require("dotenv").config();
+} catch (e) {
+    console.error(
+        "[Startup] Missing dependency 'dotenv' (and likely node_modules). " +
+            "Disk is full (ENOSPC) or npm install failed. " +
+            "Delete /home/container/.npm and node_modules in File Manager, free space, then: npm install --omit=dev --no-audit --no-fund"
+    );
+    console.error(e?.message || e);
+    process.exit(1);
+}
 try {
     const groqKey = Boolean(
         process.env.GROQ_API_KEY || process.env.GROQ_KEY || process.env.GROQ_TOKEN

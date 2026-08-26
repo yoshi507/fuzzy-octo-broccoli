@@ -1,33 +1,28 @@
 {
   "name": "omnibot",
   "version": "1.0.0",
-  "description": "",
+  "description": "OmniBot Discord bot + dashboard API",
   "main": "boot-entry.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
     "start": "node boot-entry.js",
     "shard": "node shard.js",
     "test:api": "node api/tests/smoke.js && node api/tests/integration.js"
   },
-  "keywords": [],
-  "author": "",
   "license": "ISC",
   "type": "commonjs",
+  "engines": {
+    "node": ">=18"
+  },
   "dependencies": {
-    "@discordjs/opus": "^0.10.0",
     "@discordjs/voice": "^0.19.2",
     "cors": "^2.8.5",
     "discord.js": "^14.27.0",
-    "dotenv": "^17.4.2",
+    "dotenv": "^16.4.7",
     "express": "^4.21.2",
     "express-rate-limit": "^7.5.0",
-    "ffmpeg-static": "^5.2.0",
-    "groq-sdk": "^1.5.0",
+    "groq-sdk": "^0.15.0",
     "libsodium-wrappers": "^0.7.15",
-    "lowdb": "^7.0.1",
     "opusscript": "^0.0.8",
-    "play-dl": "^1.9.7",
-    "tweetnacl": "^1.0.3",
-    "yt-dlp-exec": "^1.0.2"
+    "play-dl": "^1.9.7"
   }
 }
