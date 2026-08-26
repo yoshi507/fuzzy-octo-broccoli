@@ -99,6 +99,54 @@ function createApiApp(discordClient) {
     });
   });
 
+  // Deploy diagnostic — open https://omnibot.wisp.uno/version after git pull + restart
+  app.get('/version', (req, res) => {
+    const commandsPath = path.join(__dirname, '../commands');
+    let commandFiles = [];
+    try {
+      commandFiles = fs
+        .readdirSync(commandsPath)
+        .filter((f) => f.endsWith('.js') && !f.startsWith('_'))
+        .map((f) => f.replace(/\.js$/, ''))
+        .sort();
+    } catch (_) {}
+    const features = ['swearjar', 'automation', 'captcha', 'userphone', 'forumhelp'];
+    const featurePresent = {};
+    for (const n of features) featurePresent[n] = commandFiles.includes(n);
+    let diskOk = true;
+    let diskError = null;
+    try {
+      const probe = path.join(process.cwd(), '.omnibot-disk-probe');
+      fs.writeFileSync(probe, String(Date.now()));
+      fs.unlinkSync(probe);
+    } catch (e) {
+      diskOk = false;
+      diskError = e?.code || e?.message || String(e);
+    }
+    const client = req.app.locals.discordClient || global.__omnibotClient || null;
+    res.json({
+      ok: true,
+      deployMarker: '2026-08-26-feature-pack-v2',
+      service: 'OmniBot API',
+      uptime: process.uptime(),
+      node: process.version,
+      discordReady: Boolean(
+        client &&
+          (typeof client.isReady === 'function' ? client.isReady() : client.readyAt)
+      ),
+      guilds: client?.guilds?.cache?.size ?? 0,
+      commandFileCount: commandFiles.length,
+      featureCommands: featurePresent,
+      featureCommandsMissing: features.filter((n) => !featurePresent[n]),
+      groqConfigured: Boolean(
+        process.env.GROQ_API_KEY || process.env.GROQ_KEY || process.env.GROQ_TOKEN
+      ),
+      diskWriteOk: diskOk,
+      diskError,
+      dashboardUrl: 'https://omnibot.wisp.uno'
+    });
+  });
+
   app.use('/auth', authRoutes);
   app.use('/guilds', guildRoutes);
   app.use('/guilds/:guildId/settings', settingsRoutes);
