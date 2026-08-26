@@ -1,3 +1,4 @@
+console.log("[Startup] deployMarker=2026-08-26-feature-pack-v2");
 require("dotenv").config();
 try {
     const groqKey = Boolean(

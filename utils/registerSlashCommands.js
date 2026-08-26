@@ -60,10 +60,12 @@ async function registerSlashCommands(client) {
         process.env.DISCORD_TOKEN ||
         process.env.TOKEN ||
         process.env.BOT_TOKEN;
+    // Prefer the logged-in application's ID — env CLIENT_ID can be wrong/stale
     const clientId =
+        client?.user?.id ||
+        client?.application?.id ||
         process.env.CLIENT_ID ||
-        process.env.DISCORD_CLIENT_ID ||
-        client?.user?.id;
+        process.env.DISCORD_CLIENT_ID;
 
     if (!token) {
         console.error("[SlashRegister] No Discord token — cannot register commands");
@@ -73,6 +75,7 @@ async function registerSlashCommands(client) {
         console.error("[SlashRegister] No client ID — cannot register commands");
         return { ok: false, reason: "no_client_id" };
     }
+    console.log(`[SlashRegister] Using application id=${clientId}`);
 
     const body = collectCommandJson();
     if (!body.length) {
@@ -131,11 +134,19 @@ async function registerSlashCommands(client) {
 
         return { ok: true, scope: "global", count: body.length };
     } catch (err) {
+        const raw = err?.rawError || err?.data || null;
         console.error(
             "[SlashRegister] Deployment failed:",
             err?.message || err
         );
-        return { ok: false, reason: err?.message || "error" };
+        if (raw) {
+            try {
+                console.error("[SlashRegister] Discord raw error:", JSON.stringify(raw).slice(0, 1500));
+            } catch (_) {
+                console.error("[SlashRegister] Discord raw error (unstringifiable)");
+            }
+        }
+        return { ok: false, reason: err?.message || "error", raw };
     }
 }
 
